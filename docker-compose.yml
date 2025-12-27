@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      - GOOGLE_CLOUD_PROJECT
+      - GOOGLE_APPLICATION_CREDENTIALS
+      - GEMINI_API_KEY
+      - GEMINI_IMAGE_MODEL=gemini-3-pro-image-preview
+      - APP_ENV=prod # Use real Vertex AI in container
+    volumes:
+      - ./backend:/app
+      - ~/.config/gcloud:/root/.config/gcloud # Mount gcloud credentials
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
