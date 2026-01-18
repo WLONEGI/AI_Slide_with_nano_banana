@@ -5,9 +5,7 @@ from .graph_types import State
 from .nodes import (
     supervisor_node,
     research_node,
-    research_node,
     coordinator_node,
-
     storywriter_node,
     visualizer_node,
     planner_node,

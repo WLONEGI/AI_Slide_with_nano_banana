@@ -20,19 +20,26 @@ dependencies = [
     "markdownify>=1.1.0",
     "fastapi>=0.110.0",
     "uvicorn>=0.27.1",
+    "python-multipart>=0.0.9",
     "sse-starlette>=1.6.5",
     "pandas>=2.2.3",
     "numpy>=2.2.3",
     "yfinance>=0.2.54",
     "langchain-deepseek>=0.1.2",
-    "langchain-google-genai>=0.0.6",
-    "langchain-google-vertexai>=0.0.3",
+    "langchain-google-genai>=2.0.8",
+    "google-genai>=0.3.0",
     "langchain-google-community>=2.0.10",
     "langgraph-checkpoint-postgres>=3.0.2",
-    "psycopg-pool>=3.3.0",
+    "psycopg[binary,pool]>=3.2.0",
     "google-cloud-storage>=2.19.0",
-    "pydantic-settings>=2.7.0"
+    "pydantic-settings>=2.7.0",
+    # PPTXテンプレート機能
+    "python-pptx>=1.0.0",
+    "lxml>=5.0.0",
+    "pdf2image>=1.17.0",
+    "Pillow>=10.0.0",
 ]
+
 
 [project.optional-dependencies]
 dev = [

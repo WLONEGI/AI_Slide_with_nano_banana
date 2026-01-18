@@ -14,11 +14,18 @@ class TaskStep(BaseModel):
         description="エージェントへの詳細な指示（トーン、対象読者、具体的な要件を含む）"
     )
     description: str = Field(description="このステップの概要説明")
+    design_direction: Optional[str] = Field(
+        default=None,
+        description="Visualizerへのデザイン指示（トーン、スタイル、モチーフなど）。Storywriterの場合はNoneでよい。"
+    )
+
 
 
 class PlannerOutput(BaseModel):
     """Plannerノードの出力"""
     steps: List[TaskStep] = Field(description="実行計画のステップリスト")
+
+
 
 
 # === Storywriter Output ===
@@ -35,9 +42,13 @@ class SlideContent(BaseModel):
     )
 
 
+
+
 class StorywriterOutput(BaseModel):
     """Storywriterノードの出力"""
     slides: List[SlideContent] = Field(description="スライドコンテンツのリスト")
+
+
 
 
 # === Visualizer Output ===
@@ -48,17 +59,92 @@ class ThoughtSignature(BaseModel):
     refined_prompt: Optional[str] = Field(default=None, description="修正後のプロンプト（編集時）")
     model_version: str = Field(default="gemini-exp-1121", description="使用モデルバージョン")
     reference_image_url: Optional[str] = Field(default=None, description="使用されたリファレンス画像のURL")
+    api_thought_signature: Optional[str] = Field(default=None, description="Gemini 3.0 APIからの不透明な思考署名トークン")
+
+
+
+
+# === Structured Image Prompt (v2: Markdown Slide Format) ===
+class StructuredImagePrompt(BaseModel):
+    """Markdownベースのスライド画像生成プロンプト
+    
+    シンプルなMarkdown形式でスライド情報を構造化し、
+    Geminiに直接送信可能な形式にコンパイルする。
+    
+    出力形式例:
+    ```
+    # Slide1: Title Slide
+    ## The Evolution of Japan's Economy
+    ### From Post-War Recovery to Future Innovation
+    
+    [Contents]
+    
+    Visual style: [English description]
+    ```
+    """
+    
+    # === Slide Identity ===
+    slide_type: str = Field(
+        default="Content",
+        description="スライドの種類（例: 'Title Slide', 'Content', 'Section Header', 'Data Visualization', 'Comparison'）"
+    )
+    
+    # === Text Content (日本語) ===
+    main_title: str = Field(
+        description="メインタイトル（日本語または英語）。画像内にレンダリングされる。"
+    )
+    sub_title: Optional[str] = Field(
+        default=None,
+        description="サブタイトル（オプション）。画像内にレンダリングされる。"
+    )
+    contents: Optional[str] = Field(
+        default=None,
+        description="本文コンテンツ（テキスト、リスト、データ、markdownテーブル、mermaid図など）"
+    )
+    
+    # === Visual Style (英語) ===
+    visual_style: str = Field(
+        description="ビジュアルスタイルの詳細な説明（英語）。デザイン、色、構図、モチーフなどを自由に記述。"
+    )
+
 
 
 class ImagePrompt(BaseModel):
-    """画像生成プロンプト"""
+    """画像生成プロンプト（構造化対応版）
+    
+    従来の `image_generation_prompt` (str) に加え、
+    新たに `structured_prompt` (StructuredImagePrompt) をサポート。
+    
+    優先度: structured_prompt > image_generation_prompt
+    """
     slide_number: int = Field(description="対象スライド番号")
-    image_generation_prompt: str = Field(
-        description="英語で記述された画像生成プロンプト。5つの要素（[Role], [Context], [Logic], [Style], [Constraints]）を明示的に含めること。"
+    
+    # レイアウトタイプ（テンプレート参照画像の選択に使用）
+    layout_type: Literal[
+        "title_slide", "title_and_content", "section_header",
+        "two_content", "comparison", "content_with_caption",
+        "picture_with_caption", "blank", "other"
+    ] = Field(
+        default="title_and_content",
+        description="このスライドに適用するレイアウトタイプ（テンプレート参照画像の選択に使用）"
     )
+    
+    # --- NEW: 構造化プロンプト ---
+    structured_prompt: Optional[StructuredImagePrompt] = Field(
+        default=None,
+        description="JSON構造化プロンプト（Nano Banana Pro最適化）。指定された場合、image_generation_promptより優先される。"
+    )
+    
+    # --- 従来のプロンプト（後方互換性） ---
+    image_generation_prompt: Optional[str] = Field(
+        default=None,
+        description="従来形式のプロンプト文字列。structured_promptが指定されていない場合に使用。"
+    )
+    
     rationale: str = Field(description="このビジュアルを選んだ理由（推論の根拠）")
-    generated_image_url: Optional[str] = Field(default=None, description="生成的された画像のGCS URL（生成後に入力される）")
+    generated_image_url: Optional[str] = Field(default=None, description="生成された画像のGCS URL（生成後に入力される）")
     thought_signature: Optional[ThoughtSignature] = Field(default=None, description="Deep Edit用の思考署名")
+
 
 
 
@@ -82,8 +168,10 @@ class GenerationConfig(BaseModel):
     )
 
 
+
 class VisualizerOutput(BaseModel):
-    """Visualizerノードの出力"""
+    """Visualizerノードの出力（v2: Markdown Slide Format 対応版）"""
+    
     anchor_image_prompt: Optional[str] = Field(
         default=None,
         description="スライド全体のデザインスタイルを定義するアンカー画像用のプロンプト（テキストを含まない、背景やスタイルのみの画像）"
@@ -105,6 +193,8 @@ class VisualizerOutput(BaseModel):
     parent_id: Optional[str] = Field(default=None, description="修正元の画像ID（編集時）")
 
 
+
+
 # === Researcher Query Planner Output ===
 class SearchQuery(BaseModel):
     """検索クエリ"""
@@ -114,6 +204,7 @@ class SearchQuery(BaseModel):
         default="medium",
         description="優先度"
     )
+
 
 
 class QueryPlannerOutput(BaseModel):
@@ -127,10 +218,13 @@ class QueryPlannerOutput(BaseModel):
     )
 
 
+
+
 # === Data Analyst Output ===
 class DataPoint(BaseModel):
     label: str = Field(description="ラベル（例: 2020年, iPhone）")
     value: float | str = Field(description="値（数値またはテキスト）")
+
 
 class VisualBlueprint(BaseModel):
     """視覚的設計図"""
@@ -140,9 +234,12 @@ class VisualBlueprint(BaseModel):
     annotations: List[str] = Field(description="注釈リスト")
     design_notes: str = Field(description="デザイン上の注意点")
 
+
 class DataAnalystOutput(BaseModel):
     """Data Analystノードの出力"""
     blueprints: List[VisualBlueprint] = Field(description="生成された視覚的設計図のリスト")
+
+
 
 
 # === Reviewer Output ===

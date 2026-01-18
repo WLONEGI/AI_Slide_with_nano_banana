@@ -1,12 +1,13 @@
 """
-FastAPI application for LangManus.
+FastAPI application for Spell.
 """
 
 import json
 import logging
+import base64
 from typing import Any, AsyncGenerator
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
@@ -26,16 +27,23 @@ async def lifespan(app: FastAPI):
     Lifespan context manager for the FastAPI app.
     Handles startup and shutdown events.
     """
+    logger.info("🚀 Starting Spell API...")
     logger.info("Initializing application resources...")
-    await initialize_graph()
+    try:
+        await initialize_graph()
+        logger.info("✅ Application initialized successfully.")
+    except Exception as e:
+        logger.critical(f"❌ Application startup failed: {e}")
+        raise e  # Ensure app crashes on startup if initialization fails
     yield
     logger.info("Cleaning up application resources...")
     await close_graph()
+    logger.info("👋 Application shutdown complete.")
 
 # Create FastAPI app
 app = FastAPI(
-    title="LangManus API",
-    description="API for LangManus LangGraph-based agent workflow",
+    title="Spell API",
+    description="API for Spell LangGraph-based agent workflow",
     version="0.1.0",
     lifespan=lifespan,
 )
@@ -81,6 +89,51 @@ class ChatRequest(BaseModel):
         False, description="Whether to search before planning"
     )
     thread_id: str | None = Field(None, description="The thread ID for persistence")
+    pptx_template_base64: str | None = Field(
+        None, 
+        description="Base64-encoded PPTX template file for design context extraction"
+    )
+
+
+async def _extract_design_context(pptx_base64: str | None):
+    """
+    PPTXテンプレートからDesignContextを抽出する（AIワークフロー外の事前処理）
+    
+    Args:
+        pptx_base64: Base64エンコードされたPPTXファイル
+        
+    Returns:
+        DesignContext or None
+    """
+    if not pptx_base64:
+        return None
+    
+    try:
+        from src.utils.template_analyzer import analyze_pptx_template
+        
+        # Base64デコード
+        pptx_bytes = base64.b64decode(pptx_base64)
+        logger.info(f"Decoding PPTX template: {len(pptx_bytes)} bytes")
+        
+        # テンプレート解析（事前処理）
+        design_context = await analyze_pptx_template(
+            pptx_bytes,
+            filename="uploaded_template.pptx",
+            upload_to_gcs_enabled=True
+        )
+        
+        logger.info(
+            f"DesignContext extracted: {len(design_context.layouts)} layouts, "
+            f"{len(design_context.layout_image_bytes)} layout images"
+        )
+        return design_context
+        
+    except ImportError as e:
+        logger.warning(f"PPTX template analysis not available: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"Failed to extract design context: {e}")
+        return None
 
 
 @app.post("/api/chat/stream")
@@ -119,6 +172,9 @@ async def chat_endpoint(request: ChatRequest, req: Request):
 
             messages.append(message_dict)
 
+        # [NEW] PPTXテンプレートからDesignContextを抽出（事前処理）
+        design_context = await _extract_design_context(request.pptx_template_base64)
+
         async def event_generator():
             try:
                 async for event in run_agent_workflow(
@@ -127,6 +183,7 @@ async def chat_endpoint(request: ChatRequest, req: Request):
                     request.deep_thinking_mode,
                     request.search_before_planning,
                     request.thread_id,
+                    design_context=design_context,  # [NEW] 追加
                 ):
                     # Check if client is still connected
                     if await req.is_disconnected():
@@ -145,6 +202,86 @@ async def chat_endpoint(request: ChatRequest, req: Request):
             media_type="text/event-stream",
             sep="\n",
         )
+    except ValueError as e:
+        logger.error(f"Invalid request data: {e}")
+        raise HTTPException(status_code=400, detail=f"Invalid request: {str(e)}")
+    except HTTPException as e:
+        raise e  # Re-raise HTTPExceptions (like from helpers)
     except Exception as e:
         logger.error(f"Error in chat endpoint: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for Cloud Run."""
+    return {"status": "ok"}
+
+
+@app.post("/api/template/analyze")
+async def analyze_template_endpoint(file: UploadFile = File(...)):
+    """
+    PPTXテンプレートを解析してDesignContextを返すエンドポイント
+    
+    このエンドポイントは、テンプレートの事前解析に使用できます。
+    フロントエンドでテンプレートをアップロードし、解析結果を
+    キャッシュして後続のchatリクエストで使用できます。
+    
+    Args:
+        file: アップロードされたPPTXファイル
+        
+    Returns:
+        解析結果（JSON形式のDesignContext）
+    """
+    if not file.filename or not file.filename.endswith(('.pptx', '.PPTX')):
+        raise HTTPException(
+            status_code=400, 
+            detail="Invalid file type. Please upload a .pptx file."
+        )
+    
+    try:
+        from src.utils.template_analyzer import analyze_pptx_template
+        
+        # ファイル読み込み
+        pptx_bytes = await file.read()
+        logger.info(f"Received PPTX template: {file.filename} ({len(pptx_bytes)} bytes)")
+        
+        # テンプレート解析
+        design_context = await analyze_pptx_template(
+            pptx_bytes,
+            filename=file.filename,
+            upload_to_gcs_enabled=True
+        )
+        
+        # レスポンス生成（layout_image_bytesは除外される）
+        return {
+            "success": True,
+            "filename": file.filename,
+            "design_context": design_context.model_dump(mode="json"),
+            "summary": {
+                "layouts_count": len(design_context.layouts),
+                "layout_types": [l.layout_type for l in design_context.layouts],
+                "color_scheme": {
+                    "accent1": design_context.color_scheme.accent1,
+                    "accent2": design_context.color_scheme.accent2,
+                },
+                "font_scheme": {
+                    "major": design_context.font_scheme.major_latin,
+                    "minor": design_context.font_scheme.minor_latin,
+                }
+            }
+        }
+        
+    except ImportError as e:
+        raise HTTPException(
+            status_code=501,
+            detail=f"PPTX template analysis dependencies not installed: {e}"
+        )
+    except Exception as e:
+        logger.error(f"Error analyzing template: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to analyze template: {str(e)}"
+        )
+

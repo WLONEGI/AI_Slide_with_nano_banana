@@ -1,4 +1,4 @@
-# LangManus
+# Spell
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -7,7 +7,7 @@
 
 > Come From Open Source, Back to Open Source
 
-LangManus is a community-driven AI automation framework that builds upon the incredible work of the open source community. Our goal is to combine language models with specialized tools for tasks like web search, crawling, and Python code execution, while giving back to the community that made this possible.
+Spell is a community-driven AI automation framework that builds upon the incredible work of the open source community. Our goal is to combine language models with specialized tools for tasks like web search, crawling, and Python code execution, while giving back to the community that made this possible.
 
 ## Demo Video
 
@@ -22,7 +22,7 @@ LangManus is a community-driven AI automation framework that builds upon the inc
 - [Quick Start](#quick-start)
 - [Architecture](#architecture)
 - [Features](#features)
-- [Why LangManus?](#why-langmanus)
+- [Why Spell?](#why-spell)
 - [Setup](#setup)
     - [Prerequisites](#prerequisites)
     - [Installation](#installation)
@@ -60,9 +60,9 @@ uv run main.py
 
 ## Architecture
 
-LangManus implements a hierarchical multi-agent system where a supervisor coordinates specialized agents to accomplish complex tasks:
+Spell implements a hierarchical multi-agent system where a supervisor coordinates specialized agents to accomplish complex tasks:
 
-![LangManus Architecture](./assets/architecture.png)
+![Spell Architecture](./assets/architecture.png)
 
 The system consists of the following agents working together:
 
@@ -100,7 +100,7 @@ The system consists of the following agents working together:
     - Multi-agent orchestration
     - Task delegation and monitoring
 
-## Why LangManus?
+## Why Spell?
 
 We believe in the power of open source collaboration. This project wouldn't be possible without the amazing work of projects like:
 - [Qwen](https://github.com/QwenLM/Qwen) for their open source LLMs
@@ -118,7 +118,7 @@ We're committed to giving back to the community and welcome contributions of all
 
 ### Installation
 
-LangManus leverages [uv](https://github.com/astral-sh/uv) as its package manager to streamline dependency management.
+Spell leverages [uv](https://github.com/astral-sh/uv) as its package manager to streamline dependency management.
 Follow the steps below to set up a virtual environment and install the necessary dependencies:
 
 ```bash
@@ -136,7 +136,7 @@ By completing these steps, you'll ensure your environment is properly configured
 
 ### Configuration
 
-LangManus uses a three-tier LLM system with separate configurations for reasoning, basic tasks, and vision-language tasks. Create a `.env` file in the project root and configure the following environment variables:
+Spell uses a three-tier LLM system with separate configurations for reasoning, basic tasks, and vision-language tasks. Create a `.env` file in the project root and configure the following environment variables:
 
 ```ini
 # Reasoning LLM Configuration (for complex reasoning tasks)
@@ -180,7 +180,7 @@ cp .env.example .env
 ```
 
 ### Configure Pre-commit Hook
-LangManus includes a pre-commit hook that runs linting and formatting checks before each commit. To set it up:
+Spell includes a pre-commit hook that runs linting and formatting checks before each commit. To set it up:
 
 1. Make the pre-commit script executable:
 ```bash
@@ -202,7 +202,7 @@ The pre-commit hook will automatically:
 
 ### Basic Execution
 
-To run LangManus with default settings:
+To run Spell with default settings:
 
 ```bash
 uv run main.py
@@ -210,7 +210,7 @@ uv run main.py
 
 ### API Server
 
-LangManus provides a FastAPI-based API server with streaming support:
+Spell provides a FastAPI-based API server with streaming support:
 
 ```bash
 # Start the API server
@@ -236,14 +236,14 @@ The API server exposes the following endpoints:
 
 ### Advanced Configuration
 
-LangManus can be customized through various configuration files in the `src/config` directory:
+Spell can be customized through various configuration files in the `src/config` directory:
 - `env.py`: Configure LLM models, API keys, and base URLs
 - `tools.py`: Adjust tool-specific settings (e.g., Tavily search results limit)
 - `agents.py`: Modify team composition and agent system prompts
 
 ### Agent Prompts System
 
-LangManus uses a sophisticated prompting system in the `src/prompts` directory to define agent behaviors and responsibilities:
+Spell uses a sophisticated prompting system in the `src/prompts` directory to define agent behaviors and responsibilities:
 
 #### Core Agent Roles
 
@@ -274,7 +274,7 @@ Each agent's prompt is defined in a separate markdown file, making it easy to mo
 
 ## Web UI
 
-LangManus provides a default web UI.
+Spell provides a default web UI.
 
 Please refer to the [langmanus/langmanus-web-ui](https://github.com/langmanus/langmanus-web) project for more details.
 
@@ -315,4 +315,4 @@ This project is open source and available under the [MIT License](LICENSE).
 
 ## Acknowledgments
 
-Special thanks to all the open source projects and contributors that make LangManus possible. We stand on the shoulders of giants.
+Special thanks to all the open source projects and contributors that make Spell possible. We stand on the shoulders of giants.

@@ -33,7 +33,7 @@ async def test_deep_edit_anchor_reuse():
     # 2. Mock Dependencies
     with patch("src.graph.nodes.get_llm_by_type") as mock_get_llm, \
          patch("src.graph.nodes.process_single_slide", new_callable=AsyncMock) as mock_process_slide, \
-         patch("src.utils.storage.download_blob_as_bytes", new_callable=MagicMock) as mock_download:
+         patch("src.graph.nodes.download_blob_as_bytes", new_callable=MagicMock) as mock_download:
         
         # Mock LLM response (No new anchor prompt -> Reuse Strategy)
         mock_llm_instance = MagicMock()
@@ -56,8 +56,10 @@ async def test_deep_edit_anchor_reuse():
         mock_download.return_value = mock_anchor_bytes
 
         # Mock process_single_slide return value
-        async def side_effect(prompt_item, previous_generations, i, override_reference_bytes=None):
-            prompt_item.generated_image_url = f"https://fake_url/{i}.png"
+        call_counter = [0]  # Using list for mutable closure
+        async def side_effect(prompt_item, previous_generations=None, override_reference_bytes=None, design_context=None):
+            call_counter[0] += 1
+            prompt_item.generated_image_url = f"https://fake_url/{call_counter[0]}.png"
             return prompt_item
         
         mock_process_slide.side_effect = side_effect

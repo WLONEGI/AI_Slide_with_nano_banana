@@ -31,7 +31,7 @@ async def test_process_single_slide_basic(mock_storage, mock_gen_image):
     mock_upload, mock_download = mock_storage
     
     # Setup mocks
-    mock_gen_image.return_value = b"image_data"
+    mock_gen_image.return_value = (b"image_data", None)  # (bytes, token)
     mock_upload.return_value = "http://gcs/image.png"
 
     item = ImagePrompt(slide_number=1, image_generation_prompt="A cat", rationale="reason")
@@ -48,7 +48,7 @@ async def test_process_single_slide_basic(mock_storage, mock_gen_image):
 @pytest.mark.asyncio
 async def test_process_single_slide_deep_edit_match(mock_storage, mock_gen_image):
     mock_upload, mock_download = mock_storage
-    mock_gen_image.return_value = b"new_image"
+    mock_gen_image.return_value = (b"new_image", None)  # (bytes, token)
     mock_upload.return_value = "http://gcs/new.png"
     mock_download.return_value = b"ref_image"
 
@@ -64,12 +64,12 @@ async def test_process_single_slide_deep_edit_match(mock_storage, mock_gen_image
     
     assert result.thought_signature.seed == 999
     mock_download.assert_called_with("http://old/ref.png")
-    mock_gen_image.assert_called_with("A dog", seed=999, reference_image=b"ref_image")
+    mock_gen_image.assert_called_with("A dog", seed=999, reference_image=b"ref_image", thought_signature=ANY)
 
 @pytest.mark.asyncio
 async def test_process_single_slide_override_anchor(mock_storage, mock_gen_image):
     mock_upload, _ = mock_storage
-    mock_gen_image.return_value = b"new_image"
+    mock_gen_image.return_value = (b"new_image", None)  # (bytes, token)
     mock_upload.return_value = "http://gcs/new.png"
     
     anchor_bytes = b"anchor_bytes"
@@ -77,7 +77,7 @@ async def test_process_single_slide_override_anchor(mock_storage, mock_gen_image
     
     await process_single_slide(item, override_reference_bytes=anchor_bytes)
     
-    mock_gen_image.assert_called_with("Prompt", seed=ANY, reference_image=anchor_bytes)
+    mock_gen_image.assert_called_with("Prompt", seed=ANY, reference_image=anchor_bytes, thought_signature=ANY)
 
 
 # === Tests for visualizer_node ===

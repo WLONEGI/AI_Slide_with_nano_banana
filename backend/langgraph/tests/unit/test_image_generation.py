@@ -22,16 +22,18 @@ def test_generate_image_success(mock_genai_client, seed, reference_image):
     # Needs to match: response.candidates[0].content.parts
     mock_candidate = MagicMock()
     mock_candidate.content.parts = [mock_part]
+    mock_candidate.thought_signature = None  # Explicitly set to None
     mock_response.candidates = [mock_candidate]
     
     mock_client_instance.models.generate_content.return_value = mock_response
 
     # Execute
     prompt = "A beautiful sunset"
-    result = generate_image(prompt, seed=seed, reference_image=reference_image)
+    result_bytes, result_token = generate_image(prompt, seed=seed, reference_image=reference_image)
 
     # Verify
-    assert result == b"generated_image_bytes"
+    assert result_bytes == b"generated_image_bytes"
+    assert result_token is None  # No thought_signature in mock
     
     # Verify arguments passed to client
     mock_client_instance.models.generate_content.assert_called_once()

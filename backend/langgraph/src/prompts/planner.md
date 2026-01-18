@@ -10,10 +10,10 @@ You must analyze the user's vague request and transform it into a concrete, exec
     *   **Rule**: If the user asks "Why utilize AI?", you MUST research "AI business benefits 2024" first. Don't hallucinate.
 2.  **`storywriter`** (The Pen):
     *   **Trigger**: Use for drafting the actual slide structure and text.
-    *   **Note**: They need clear direction on "Tone" (e.g., Professional, Witty, Academic).
+    *   **Rule**: They need clear direction on "Tone" (e.g., Professional, Witty, Academic).
 3.  **`visualizer`** (The Eye):
     *   **Trigger**: MANDATORY final step for each slide.
-    *   **Rule**: You must define the **"Visual Theme"** (e.g., "Minimalist Tech", "Warm Hand-drawn") in their instruction.
+    *   **Rule**: You must define the **"Design Direction"** (e.g., visual theme, color palette, mood) in the `design_direction` field.
 4.  **`data_analyst`** (The Architect):
     *   **Trigger**: Use when raw data/text needs to be turned into a structured visual concept (Charts, Timelines, Infographics).
     *   **Rule**: Always use *before* `visualizer` when complex data visualization is needed.
@@ -40,19 +40,22 @@ Return **ONLY** a valid JSON object with a `steps` array.
       "id": 1,
       "role": "researcher",
       "instruction": "Research the latest market size of Generative AI in Japan (2023-2025). Focus on growth rates and key players.",
-      "description": "Gather market justification."
+      "description": "Gather market justification.",
+      "design_direction": null
     },
     {
       "id": 2,
       "role": "storywriter",
       "instruction": "Draft 3 slides. Target Audience: Executives. Tone: Professional & Urgent. Reference the data from Step 1. Structure: 1. The Opportunity (Market Size), 2. The Gap, 3. Our Solution.",
-      "description": "Draft narrative outline."
+      "description": "Draft narrative outline.",
+      "design_direction": null
     },
     {
       "id": 3,
       "role": "visualizer",
-      "instruction": "Generate prompt for all slides. Visual Theme: 'Future-Corporate', using deep navy and neon blue accents, glassmorphism style. High trust, high tech.",
-      "description": "Design slide visuals."
+      "instruction": "Generate prompt for all slides.",
+      "description": "Design slide visuals.",
+      "design_direction": "Visual Theme: 'Future-Corporate'. Color Palette: Deep navy background with neon blue and white accents. Style: Glassmorphism, sleek lines, high-tech feel. Mood: Trustworthy and innovative."
     }
   ]
 }
@@ -65,4 +68,4 @@ Return **ONLY** a valid JSON object with a `steps` array.
 4.  **Japanese Output**: Instructions must be in Japanese (unless user is English).
 6.  **Refinement Mode (Phase 3)**:
     *   If the user asks for a small fix (e.g., "Change slide 1 to red"), create a **single-step plan** targeting ONLY the necessary agent (usually `visualizer` or `storywriter`). Do NOT restart the whole flow.
-    *   Example: `[{"role": "visualizer", "instruction": "Modify Slide 1: Change background to red. Keep other elements."}]`
+    *   Example: `[{"role": "visualizer", "instruction": "Modify Slide 1: Change background to red.", "design_direction": "Red background, keep other elements."}]`

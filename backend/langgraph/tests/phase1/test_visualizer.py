@@ -39,11 +39,11 @@ async def test_ut05_visualizer_prompt_generation():
     
     # Patch targets
     with patch("src.graph.nodes.get_llm_by_type", return_value=mock_llm), \
-         patch("src.utils.image_generation.generate_image", return_value=b"fake_image_bytes") as mock_gen, \
-         patch("src.utils.storage.upload_to_gcs", return_value="https://gcs-bucket/fake.png") as mock_upload:
+         patch("src.graph.nodes.generate_image", return_value=(b"fake_image_bytes", None)) as mock_gen, \
+         patch("src.graph.nodes.upload_to_gcs", return_value="https://gcs-bucket/fake.png") as mock_upload:
         
         # ノード実行
-        result = visualizer_node(state)
+        result = await visualizer_node(state)
         
         # 検証
         assert result.goto == "reviewer"

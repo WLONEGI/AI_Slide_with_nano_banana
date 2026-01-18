@@ -29,9 +29,9 @@ async def test_visualizer_node_anchor_logic():
 
     # 3. Patch dependencies
     with patch("src.graph.nodes.get_llm_by_type") as mock_get_llm, \
-         patch("src.utils.image_generation.generate_image") as mock_gen_image, \
-         patch("src.utils.storage.upload_to_gcs") as mock_upload, \
-         patch("src.utils.storage.download_blob_as_bytes") as mock_download:
+         patch("src.graph.nodes.generate_image") as mock_gen_image, \
+         patch("src.graph.nodes.upload_to_gcs") as mock_upload, \
+         patch("src.graph.nodes.download_blob_as_bytes") as mock_download:
 
         # Mock LLM behavior
         mock_structured_llm = MagicMock()
@@ -42,7 +42,7 @@ async def test_visualizer_node_anchor_logic():
 
         # Mock Utils behavior
         # Return bytes related to the prompt so we can check if anchor bytes were passed
-        mock_gen_image.side_effect = lambda prompt, seed=None, reference_image=None: f"IMAGE_BYTES_FOR_{prompt}".encode()
+        mock_gen_image.side_effect = lambda prompt, seed=None, reference_image=None, thought_signature=None: (f"IMAGE_BYTES_FOR_{prompt}".encode(), None)
         
         mock_upload.side_effect = lambda data, content_type: f"http://gcs/{hash(data)}.png"
         

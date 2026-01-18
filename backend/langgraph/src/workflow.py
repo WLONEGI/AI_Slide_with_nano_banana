@@ -1,12 +1,16 @@
 import logging
+from typing import Any
+
 from src.config import TEAM_MEMBERS
 from src.graph import build_graph
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,  # Default level is INFO
+    level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
+
+logger = logging.getLogger(__name__)
 
 
 def enable_debug_logging():
@@ -14,13 +18,11 @@ def enable_debug_logging():
     logging.getLogger("src").setLevel(logging.DEBUG)
 
 
-logger = logging.getLogger(__name__)
-
 # Create the graph
 graph = build_graph()
 
 
-def run_agent_workflow(user_input: str, debug: bool = False):
+def run_agent_workflow(user_input: str, debug: bool = False) -> dict[str, Any]:
     """Run the agent workflow with the given user input.
 
     Args:

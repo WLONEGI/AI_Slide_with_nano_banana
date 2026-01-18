@@ -8,16 +8,16 @@ from src.graph.graph_types import State
 
 @pytest.fixture
 def mock_dependencies():
-    with patch("src.utils.image_generation.generate_image") as mock_gen, \
-         patch("src.utils.storage.upload_to_gcs") as mock_upload, \
-         patch("src.utils.storage.download_blob_as_bytes") as mock_download, \
+    with patch("src.graph.nodes.generate_image") as mock_gen, \
+         patch("src.graph.nodes.upload_to_gcs") as mock_upload, \
+         patch("src.graph.nodes.download_blob_as_bytes") as mock_download, \
          patch("src.graph.nodes.apply_prompt_template") as mock_tmpl, \
          patch("src.graph.nodes.get_llm_by_type") as mock_get_llm:
          
         # Setup common mocks
         mock_upload.return_value = "https://gcs/uploaded.png"
         mock_download.return_value = b"reference_bytes"
-        mock_gen.return_value = b"new_image_bytes"
+        mock_gen.return_value = (b"new_image_bytes", None)  # (bytes, token)
         
         yield mock_gen, mock_upload, mock_download, mock_tmpl, mock_get_llm
 
@@ -48,7 +48,7 @@ async def test_it05_deep_edit_flow(mock_dependencies):
     }
 
     # Execute Visualizer
-    result_1 = visualizer_node(state_1)
+    result_1 = await visualizer_node(state_1)
     
     # Verify Initial Generation
     assert mock_gen.call_count == 1
@@ -91,7 +91,7 @@ async def test_it05_deep_edit_flow(mock_dependencies):
     mock_structured.invoke.return_value = VisualizerOutput(prompts=[refined_prompt])
     
     # Execute Visualizer again
-    result_2 = visualizer_node(state_2)
+    result_2 = await visualizer_node(state_2)
     
     # Verify Refinement Generation
     assert mock_gen.call_count == 2

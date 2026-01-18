@@ -24,6 +24,7 @@ from src.schemas import (
     ReviewOutput,
     ThoughtSignature,
     ImagePrompt,
+    StructuredImagePrompt,
 )
 from src.utils.image_generation import generate_image
 from src.utils.storage import upload_to_gcs, download_blob_as_bytes
@@ -31,6 +32,61 @@ from src.utils.storage import upload_to_gcs, download_blob_as_bytes
 from .graph_types import State, TaskStep
 
 logger = logging.getLogger(__name__)
+
+
+def compile_structured_prompt(
+    structured: StructuredImagePrompt,
+    slide_number: int = 1
+) -> str:
+    """
+    構造化プロンプトをMarkdownスライド形式の最終プロンプトに変換。
+    
+    出力形式:
+    ```
+    # Slide1: Title Slide
+    ## The Evolution of Japan's Economy
+    ### From Post-War Recovery to Future Innovation
+    
+    [Contents]
+    
+    Visual style: [English description]
+    ```
+    
+    Args:
+        structured: StructuredImagePrompt オブジェクト
+        slide_number: スライド番号
+        
+    Returns:
+        str: Geminiに送信する最終的なテキストプロンプト
+    """
+    prompt_lines = []
+    
+    # Slide Header: # Slide1: Title Slide
+    prompt_lines.append(f"# Slide{slide_number}: {structured.slide_type}")
+    
+    # Main Title: ## The Evolution of Japan's Economy
+    prompt_lines.append(f"## {structured.main_title}")
+    
+    # Sub Title (optional): ### From Post-War Recovery...
+    if structured.sub_title:
+        prompt_lines.append(f"### {structured.sub_title}")
+    
+    # Empty line before contents
+    prompt_lines.append("")
+    
+    # Contents (optional)
+    if structured.contents:
+        prompt_lines.append(structured.contents)
+        prompt_lines.append("")
+    
+    # Visual style
+    prompt_lines.append(f"Visual style: {structured.visual_style}")
+    
+    # 最終プロンプト生成
+    final_prompt = "\n".join(prompt_lines)
+    logger.debug(f"Compiled slide prompt ({len(final_prompt)} chars)")
+    
+    return final_prompt
 
 
 def _update_artifact(state: State, key: str, value: Any) -> dict[str, Any]:
@@ -103,22 +159,26 @@ def storywriter_node(state: State) -> Command[Literal["supervisor"]]:
 async def process_single_slide(
     prompt_item: ImagePrompt, 
     previous_generations: list[dict] | None = None, 
-    override_reference_bytes: bytes | None = None
+    override_reference_bytes: bytes | None = None,
+    design_context: Any = None,  # DesignContext | None (型ヒントは循環参照を避けるためAny)
 ) -> ImagePrompt:
     """
     Helper function to process a single slide: generation or edit.
 
     Handles the core image generation logic, including:
-    1. Seed management for determinism (reusing seed from ThoughtSignature).
-    2. Reference image handling for Deep Edit / Visual Consistency.
-    3. Image generation via Vertex AI.
-    4. Uploading to GCS.
+    1. Template reference image selection (based on layout_type in design_context).
+    2. Seed management for determinism (reusing seed from ThoughtSignature).
+    3. Reference image handling for Deep Edit / Visual Consistency.
+    4. **Structured Prompt Compilation**: Converts StructuredImagePrompt to final text.
+    5. Image generation via Vertex AI.
+    6. Uploading to GCS.
 
     Args:
         prompt_item (ImagePrompt): The prompt object containing the image generation instruction.
         previous_generations (list[dict] | None): List of previous generation data for "Deep Edit" logic.
         override_reference_bytes (bytes | None): Optional image bytes to force as a reference (e.g., Anchor Image).
                                                  If provided, this takes precedence over previous generations.
+        design_context: DesignContext with layout-based template images (optional).
 
     Returns:
         ImagePrompt: Updated prompt item with `generated_image_url` and `thought_signature` populated.
@@ -127,39 +187,64 @@ async def process_single_slide(
         Exception: Captures and logs generation failures, returning the item with None URL to allow partial batch success.
     """
 
-
     try:
-        logger.info(f"Processing image generation for slide {prompt_item.slide_number}...")
+        layout_type = getattr(prompt_item, 'layout_type', 'title_and_content')
+        logger.info(f"Processing slide {prompt_item.slide_number} (layout: {layout_type})...")
         
-        # === Deep Edit Logic ===
+        # === Compile Structured Prompt (v2) ===
+        # 優先度: structured_prompt > image_generation_prompt
+        if prompt_item.structured_prompt is not None:
+            final_prompt = compile_structured_prompt(
+                prompt_item.structured_prompt,
+                slide_number=prompt_item.slide_number
+            )
+            logger.info(f"Using structured prompt for slide {prompt_item.slide_number}")
+        elif prompt_item.image_generation_prompt:
+            final_prompt = prompt_item.image_generation_prompt
+            logger.info(f"Using legacy prompt for slide {prompt_item.slide_number}")
+        else:
+            raise ValueError(f"Slide {prompt_item.slide_number} has neither structured_prompt nor image_generation_prompt")
+        
+        # === Reference Image Selection ===
         seed = None
         reference_image_bytes = None
         reference_url = None
+        previous_thought_signature_token = None # [NEW] Unknown opaque token from Gemini 3.0 API
         
-        # 1. Use Override (Anchor Image) if provided
+        # 1. Use Override (Anchor Image) if provided - highest priority
         if override_reference_bytes:
-            logger.info(f"Using Anchor Image as reference for slide {prompt_item.slide_number}")
+            logger.info(f"Using explicit override reference for slide {prompt_item.slide_number}")
             reference_image_bytes = override_reference_bytes
-            # Note: We don't necessarily set reference_url here as it's an in-memory byte buffer from the anchor.
         
-        # 2. Check for matching previous generation to anchor consistency (Deep Edit)
-        # Only check if we don't already have an override (or maybe override takes precedence? Yes, Anchor Strategy forces consistency)
-        # However, if we are doing a specific re-generation of a slide in a deck that already has an anchor... 
-        # For now, let's assume if override is passed, it wins.
-        # 2. Check for matching previous generation to anchor consistency (Deep Edit)
+        # 2. [NEW] Use DesignContext layout-based template image
+        elif design_context:
+            # design_context.get_template_image_for_layout() returns bytes or None
+            layout_ref = design_context.get_template_image_for_layout(layout_type)
+            if layout_ref:
+                reference_image_bytes = layout_ref
+                logger.info(f"Using template image for layout '{layout_type}'")
+            else:
+                logger.warning(f"No template image found for layout '{layout_type}'")
+        
+        # 3. Check for matching previous generation (Deep Edit)
         elif previous_generations:
-            # Match by slide_number logic (assuming slide numbers are stable)
             for prev in previous_generations:
                 if prev.get("slide_number") != prompt_item.slide_number:
                     continue
                 
-                # 1. Reuse Seed (Thought Signature)
+                # Reuse Seed and Thought Signature
                 prev_sig = prev.get("thought_signature")
-                if prev_sig and "seed" in prev_sig:
-                    seed = prev_sig["seed"]
-                    logger.info(f"Reusing seed {seed} from ThoughtSignature")
-                
-                # 2. Reference Anchor (Visual Consistency)
+                if prev_sig:
+                    if "seed" in prev_sig:
+                        seed = prev_sig["seed"]
+                        logger.info(f"Reusing seed {seed} from ThoughtSignature")
+                    
+                    # [NEW] Reuse opaque API token for Gemini 3.0 Consistency
+                    if "api_thought_signature" in prev_sig and prev_sig["api_thought_signature"]:
+                        previous_thought_signature_token = prev_sig["api_thought_signature"]
+                        logger.info("Found persistent 'api_thought_signature' for Deep Edit consistency.")
+
+                # Reference Anchor (Visual Consistency)
                 if prev.get("generated_image_url"):
                     reference_url = prev["generated_image_url"]
                     logger.info(f"Downloading reference anchor from {reference_url}...")
@@ -170,19 +255,22 @@ async def process_single_slide(
                 
                 break
         
-        # Generate new seed if none found
         if seed is None:
             seed = random.randint(0, 2**32 - 1)
 
-        logger.info(f"Generating image {prompt_item.slide_number}/{'batch'} with Seed: {seed}, Ref: {bool(reference_image_bytes)}...")
+        logger.info(f"Generating image {prompt_item.slide_number} with Seed: {seed}, Ref: {bool(reference_image_bytes)}...")
         
         # 1. Generate Image (Blocking -> Thread)
-        image_bytes = await asyncio.to_thread(
+        # Returns tuple (bytes, thought_signature_str)
+        generation_result = await asyncio.to_thread(
             generate_image,
-            prompt_item.image_generation_prompt, 
+            final_prompt,  # CHANGED: Use compiled prompt
             seed=seed,
-            reference_image=reference_image_bytes
+            reference_image=reference_image_bytes,
+            thought_signature=previous_thought_signature_token
         )
+        
+        image_bytes, new_api_token = generation_result
         
         # 2. Upload to GCS (Blocking -> Thread)
         logger.info(f"Uploading image {prompt_item.slide_number} to GCS...")
@@ -194,17 +282,18 @@ async def process_single_slide(
         # Create ThoughtSignature
         prompt_item.thought_signature = ThoughtSignature(
             seed=seed,
-            base_prompt=prompt_item.image_generation_prompt,
-            refined_prompt=None, # This IS the prompt used.
+            base_prompt=final_prompt,  # CHANGED: Store compiled prompt
+            refined_prompt=None,
             model_version=AGENT_LLM_MAP["visualizer"],
-            reference_image_url=reference_url or (prompt_item.thought_signature.reference_image_url if prompt_item.thought_signature else None)
+            reference_image_url=reference_url or (prompt_item.thought_signature.reference_image_url if prompt_item.thought_signature else None),
+            api_thought_signature=new_api_token # [NEW] Store the opaque token
         )
         
         logger.info(f"Image generated and stored at: {public_url}")
         return prompt_item
 
-    except Exception as img_err:
-        logger.error(f"Failed to generate/upload image for prompt {prompt_item.slide_number}: {img_err}")
+    except Exception as image_error:
+        logger.error(f"Failed to generate/upload image for prompt {prompt_item.slide_number}: {image_error}")
         # Return item as-is (with None URL) to avoid crashing the whole batch
         return prompt_item
 
@@ -218,6 +307,7 @@ async def visualizer_node(state: State) -> Command[Literal["supervisor"]]:
     2. **Edit Mode Detection**: Identifies if this is a modification of existing slides.
     3. **Prompt Generation**: Uses the LLM to generate image prompts (ImagePrompt schema).
     4. **Anchor Strategy (Visual Consistency)**:
+        - **Strategy T (Template)**: Uses PPTX template images per layout_type (NEW - highest priority).
         - **Strategy A (Preferred)**: Generates a dedicated 'Style Anchor' image first, then uses it as a reference for all slides.
         - **Strategy B (Reuse)**: Reuses an existing anchor from a previous run (Deep Edit).
         - **Strategy C (Fallback)**: Uses the first slide as the anchor if no dedicated style is defined.
@@ -232,18 +322,53 @@ async def visualizer_node(state: State) -> Command[Literal["supervisor"]]:
     logger.info("Visualizer starting task")
     current_step = state["plan"][state["current_step_index"]]
     
+    # [NEW] Get DesignContext from state
+    design_context = state.get("design_context")
+    
     context = f"Instruction: {current_step['instruction']}\n\nAvailable Artifacts: {json.dumps(state.get('artifacts', {}), default=str)}"
+
+    # [NEW] Inject Design Direction from Planner
+    design_dir = current_step.get('design_direction')
+    if design_dir:
+        context += f"\n\n[Design Direction from Planner]:\n{design_dir}\n"
+
+
+    # [NEW] Inject design context information into prompt
+    if design_context:
+        available_layouts = ", ".join([l.layout_type for l in design_context.layouts])
+        color_context = f"""
+
+## Template Design Context
+- Primary colors: {design_context.color_scheme.accent1}, {design_context.color_scheme.accent2}
+- Background: {design_context.color_scheme.dk1}
+- Text: {design_context.color_scheme.lt1}
+- Font style: {design_context.font_scheme.major_latin} (headings)
+- Available layout types: {available_layouts}
+
+## IMPORTANT: Layout Type Selection
+For each slide, you MUST specify the appropriate `layout_type` based on the slide's purpose:
+- "title_slide": Opening or closing slides with large centered title
+- "section_header": Section dividers
+- "comparison": Side-by-side comparison slides
+- "title_and_content": Standard content slides with title and bullet points
+- "picture_with_caption": Image-focused slides
+- "blank": Full-bleed visuals without text areas
+- "other": Custom layouts
+
+The template image for each layout will be automatically used as a reference image.
+"""
+        context = context + color_context
 
     # === Phase 3: Deep Edit Workflow (Thought Signature) ===
     # Check for previous visualizer outputs to enable "Edit Mode"
-    previous_generations = []
+    previous_generations: list[dict] = []
     for key, json_str in state.get("artifacts", {}).items():
         if key.endswith("_visual"):
             try:
                 data = json.loads(json_str)
                 if "prompts" in data:
                     previous_generations.extend(data["prompts"])
-            except:
+            except Exception:
                 pass
     
     # Check for previous Anchor URL
@@ -256,7 +381,7 @@ async def visualizer_node(state: State) -> Command[Literal["supervisor"]]:
                     previous_anchor_url = data["anchor_image_url"]
                     logger.info(f"Found existing Anchor URL in artifacts: {previous_anchor_url}")
                     break # Use the first found anchor
-            except:
+            except Exception:
                 pass
     
     if previous_generations:
@@ -273,104 +398,125 @@ async def visualizer_node(state: State) -> Command[Literal["supervisor"]]:
     try:
         result: VisualizerOutput = structured_llm.invoke(messages)
         
-        # [NEW Phase 4 + Anchor Logic] Parallel Execution with Anchor
-        
         prompts = result.prompts
-        updated_prompts = []
-        anchor_bytes = None
+        updated_prompts: list[ImagePrompt] = []
+        anchor_bytes: bytes | None = None
         
-        # === Strategy Determination ===
-        anchor_prompt_text = result.anchor_image_prompt
-        if anchor_prompt_text:
-            # === STRATEGY A: Separate Style Anchor (Preferred) ===
-            logger.info("Found 'anchor_image_prompt'. Generating dedicated Style Anchor Image...")
+        # === [NEW] STRATEGY T: Template-based (Per-Layout Reference) ===
+        # This is the highest priority strategy when design_context is available
+        if design_context and design_context.layout_image_bytes:
+            logger.info("Using per-layout template images (Strategy T)")
             
-            anchor_item = ImagePrompt(
-                slide_number=0, # 0 for Anchor
-                image_generation_prompt=anchor_prompt_text,
-                rationale="Style Anchor for consistency"
-            )
-            
-            # Process Anchor
-            # Note: Anchor itself has NO reference image, so previous_generations can be ignored or passed safely.
-            # Passing 'override_reference_bytes=None' explicitly.
-            processed_anchor = await process_single_slide(anchor_item, previous_generations, override_reference_bytes=None)
-            
-            if processed_anchor.generated_image_url:
-                try:
-                    anchor_bytes = await asyncio.to_thread(download_blob_as_bytes, processed_anchor.generated_image_url)
-                    logger.info(f"Style Anchor Image downloaded ({len(anchor_bytes)} bytes).")
-                    result.anchor_image_url = processed_anchor.generated_image_url
-                except Exception as e:
-                    logger.error(f"Failed to download Style Anchor Image: {e}. Proceeding without anchor.")
-            
-            target_prompts = prompts
-
-        elif previous_anchor_url:
-            # === STRATEGY B: Reuse Existing Style Anchor (Deep Edit) ===
-            logger.info(f"Reusing existing Anchor URL: {previous_anchor_url}")
-            try:
-                anchor_bytes = await asyncio.to_thread(download_blob_as_bytes, previous_anchor_url)
-                logger.info(f"Existing Style Anchor downloaded ({len(anchor_bytes)} bytes).")
-                result.anchor_image_url = previous_anchor_url
-            except Exception as e:
-                logger.error(f"Failed to download existing Style Anchor: {e}. Falling back to Slide 1 strategy.")
-                anchor_bytes = None
-                
-            target_prompts = prompts
-
-        elif prompts:
-             # === STRATEGY C: First Slide as Anchor (Fallback) ===
-            logger.info("No 'anchor_image_prompt' found. Using Slide 1 as Anchor (Fallback Strategy)...")
-            
-            anchor_prompt = prompts[0]
-            # Process Anchor (Slide 1) - No override
-            processed_anchor = await process_single_slide(anchor_prompt, previous_generations, override_reference_bytes=None)
-            updated_prompts.append(processed_anchor)
-            
-            if processed_anchor.generated_image_url:
-                try:
-                    anchor_bytes = await asyncio.to_thread(download_blob_as_bytes, processed_anchor.generated_image_url)
-                    logger.info(f"Anchor Image (Slide 1) downloaded.")
-                except Exception as e:
-                    logger.error(f"Failed to download Anchor Image: {e}.")
-            
-            target_prompts = prompts[1:]
-        else:
-            logger.warning("No prompts generated by Visualizer.")
-            target_prompts = []
-
-        # 2. Parallel Processing for Target Prompts
-        if target_prompts:
-            # Limit concurrency
+            # Parallel processing with layout-based reference images
             semaphore = asyncio.Semaphore(settings.VISUALIZER_CONCURRENCY)
             
-            async def constrained_task(prompt_item, idx):
+            async def constrained_task_template(prompt_item: ImagePrompt) -> ImagePrompt:
                 async with semaphore:
-                    # Pass anchor_bytes as override
-                    return await process_single_slide(prompt_item, previous_generations, override_reference_bytes=anchor_bytes)
-
-            # Note on indices: enumerate starts at 0. 
-            # If Strategy A, we are strictly processing prompts in order.
-            # If Strategy B, we appended Slide 1 already, so we continue.
+                    # Pass design_context to select layout-specific reference image
+                    return await process_single_slide(
+                        prompt_item, 
+                        previous_generations,
+                        override_reference_bytes=None,  # Don't override - let design_context handle selection
+                        design_context=design_context,
+                    )
             
-            # Fix index offset
-            start_offset = 1 if not updated_prompts else 2 # If empty updated_prompts, start at 1 (Slide 1). If we rely on prompts[1:], it was slide 2.
-            # Actually, using prompt_item.slide_number is better for logging inside process_single_slide. 'idx' is just for loop counting.
-            
-            tasks = [constrained_task(item, i) for i, item in enumerate(target_prompts)]
-            
+            tasks = [constrained_task_template(item) for item in prompts]
             if tasks:
-                logger.info(f"Starting parallel generation for {len(tasks)} slides using Anchor...")
-                processed_targets = await asyncio.gather(*tasks)
-                updated_prompts.extend(processed_targets)
+                logger.info(f"Starting parallel generation for {len(tasks)} slides with per-layout templates...")
+                updated_prompts = list(await asyncio.gather(*tasks))
+        
+        # === Existing Anchor Strategies (when no design_context) ===
+        else:
+            anchor_prompt_text = result.anchor_image_prompt
+            
+            if anchor_prompt_text:
+                # === STRATEGY A: Separate Style Anchor (Preferred) ===
+                logger.info("Found 'anchor_image_prompt'. Generating dedicated Style Anchor Image...")
+                
+                anchor_item = ImagePrompt(
+                    slide_number=0, # 0 for Anchor
+                    image_generation_prompt=anchor_prompt_text,
+                    rationale="Style Anchor for consistency"
+                )
+                
+                # Process Anchor
+                processed_anchor = await process_single_slide(
+                    anchor_item, 
+                    previous_generations, 
+                    override_reference_bytes=None,
+                )
+                
+                if processed_anchor.generated_image_url:
+                    try:
+                        anchor_bytes = await asyncio.to_thread(download_blob_as_bytes, processed_anchor.generated_image_url)
+                        logger.info(f"Style Anchor Image downloaded ({len(anchor_bytes)} bytes).")
+                        result.anchor_image_url = processed_anchor.generated_image_url
+                    except Exception as e:
+                        logger.error(f"Failed to download Style Anchor Image: {e}. Proceeding without anchor.")
+                
+                target_prompts = prompts
+
+            elif previous_anchor_url:
+                # === STRATEGY B: Reuse Existing Style Anchor (Deep Edit) ===
+                logger.info(f"Reusing existing Anchor URL: {previous_anchor_url}")
+                try:
+                    anchor_bytes = await asyncio.to_thread(download_blob_as_bytes, previous_anchor_url)
+                    logger.info(f"Existing Style Anchor downloaded ({len(anchor_bytes)} bytes).")
+                    result.anchor_image_url = previous_anchor_url
+                except Exception as e:
+                    logger.error(f"Failed to download existing Style Anchor: {e}. Falling back to Slide 1 strategy.")
+                    anchor_bytes = None
+                    
+                target_prompts = prompts
+
+            elif prompts:
+                # === STRATEGY C: First Slide as Anchor (Fallback) ===
+                logger.info("No 'anchor_image_prompt' found. Using Slide 1 as Anchor (Fallback Strategy)...")
+                
+                anchor_prompt = prompts[0]
+                processed_anchor = await process_single_slide(
+                    anchor_prompt, 
+                    previous_generations, 
+                    override_reference_bytes=None,
+                )
+                updated_prompts.append(processed_anchor)
+                
+                if processed_anchor.generated_image_url:
+                    try:
+                        anchor_bytes = await asyncio.to_thread(download_blob_as_bytes, processed_anchor.generated_image_url)
+                        logger.info("Anchor Image (Slide 1) downloaded.")
+                    except Exception as e:
+                        logger.error(f"Failed to download Anchor Image: {e}.")
+                
+                target_prompts = prompts[1:]
+            else:
+                logger.warning("No prompts generated by Visualizer.")
+                target_prompts = []
+
+            # Parallel Processing for Target Prompts (for Strategy A/B/C)
+            if target_prompts:
+                semaphore = asyncio.Semaphore(settings.VISUALIZER_CONCURRENCY)
+                
+                async def constrained_task(prompt_item: ImagePrompt, idx: int) -> ImagePrompt:
+                    async with semaphore:
+                        return await process_single_slide(
+                            prompt_item, 
+                            previous_generations, 
+                            override_reference_bytes=anchor_bytes,
+                        )
+                
+                tasks = [constrained_task(item, i) for i, item in enumerate(target_prompts)]
+                
+                if tasks:
+                    logger.info(f"Starting parallel generation for {len(tasks)} slides using Anchor...")
+                    processed_targets = await asyncio.gather(*tasks)
+                    updated_prompts.extend(processed_targets)
         
         # Update results
         # Sort by slide number just in case
         updated_prompts.sort(key=lambda x: x.slide_number)
         result.prompts = updated_prompts
         
-        # content_json = result.model_dump_json(ensure_ascii=False, indent=2) # Pydantic V2 dump_json doesn't support ensure_ascii
         content_json = json.dumps(result.model_dump(), ensure_ascii=False, indent=2)
         logger.info(f"Visualizer generated {len(result.prompts)} image prompts with artifacts")
     except Exception as e:
@@ -487,7 +633,11 @@ def reviewer_node(state: State) -> Command[Literal["supervisor", "storywriter", 
             goto="supervisor",
             update={
                 "current_quality_score": review.score,
-                "feedback_history": feedback_history
+                "feedback_history": feedback_history,
+                # [FIX] Add message so Supervisor knows Reviewer finished
+                "messages": [HumanMessage(content=f"Step {current_step['id']} approved by Reviewer.", name="reviewer")],
+                # [NEW] Explicit State Update
+                "review_status": "approved"
             }
         )
 
@@ -500,7 +650,9 @@ def reviewer_node(state: State) -> Command[Literal["supervisor", "storywriter", 
             update={
                 "retry_count": current_retries + 1,
                 "messages": [HumanMessage(content=f"Review Feedback (QC Failed, Score={review.score}): {review.feedback}. Please fix and regenerate.", name="reviewer")],
-                "feedback_history": feedback_history
+                "feedback_history": feedback_history,
+                # [NEW] Explicit State Update
+                "review_status": "rejected"
             }
         )
     
@@ -533,11 +685,10 @@ def supervisor_node(state: State) -> Command[Literal[*TEAM_MEMBERS, "planner", "
     """
     logger.info("Supervisor evaluating state")
     
-    idx = state.get("current_step_index", 0)
+    step_index = state.get("current_step_index", 0)
     plan = state.get("plan", [])
     error_context = state.get("error_context")
 
-    # --- 1. Dynamic Replanning Trigger ---
     # --- 1. Dynamic Replanning Trigger ---
     if error_context:
         current_replans = state.get("replanning_count", 0)
@@ -556,7 +707,7 @@ def supervisor_node(state: State) -> Command[Literal[*TEAM_MEMBERS, "planner", "
         return Command(
             goto="planner",
             update={
-                "messages": [HumanMessage(content=f"Replanning Request: Current plan stalled at step {idx+1}. Reason: {error_context}", name="supervisor")],
+                "messages": [HumanMessage(content=f"Replanning Request: Current plan stalled at step {step_index+1}. Reason: {error_context}", name="supervisor")],
                 "retry_count": 0,
                 "replanning_count": current_replans + 1,
                 "error_context": None 
@@ -564,35 +715,39 @@ def supervisor_node(state: State) -> Command[Literal[*TEAM_MEMBERS, "planner", "
         )
 
     # --- 2. Normal Plan Progression ---
-    if idx >= len(plan):
+    if step_index >= len(plan):
         logger.info("All steps completed. Converting artifacts to final response.")
-        return Command(goto="__end__", update={"current_step_index": idx})
+        return Command(goto="__end__", update={"current_step_index": step_index})
 
-    next_step = plan[idx]
+    next_step = plan[step_index]
     current_role = next_step["role"]
     
     # Check if we are coming from a successful Review
-    # Logic: If the last message is from 'reviewer' AND we are in this node (supervisor),
-    # it implies the Reviewer sent us here via "goto='supervisor'".
-    # In our Reviewer logic, "goto='supervisor'" happens ONLY on Approval (or Max Retry error_context, handled above).
-    # So if we are here and last msg is Reviewer, it's a success.
+    # Logic: Check explicit "review_status" state first.
+    # If not present (backward compatibility), fall back to checking strict message sender.
     
+    review_status = state.get("review_status")
+    last_message_from_reviewer = False
     messages = state.get("messages", [])
     if messages and messages[-1].name == "reviewer":
+        last_message_from_reviewer = True
+
+    if review_status == "approved" or (review_status is None and last_message_from_reviewer):
          # Moved to next step
-         new_idx = idx + 1
-         logger.info(f"Step {idx} approved. Moving to Step {new_idx}")
+         new_index = step_index + 1
+         logger.info(f"Step {step_index} approved. Moving to Step {new_index}")
          
-         if new_idx >= len(plan):
-             return Command(goto="__end__", update={"current_step_index": new_idx})
+         if new_index >= len(plan):
+             return Command(goto="__end__", update={"current_step_index": new_index})
              
-         next_step = plan[new_idx] # Update to new next step
+         next_step = plan[new_index] # Update to new next step
          return Command(
             goto=next_step["role"],
             update={
-                "current_step_index": new_idx,
+                "current_step_index": new_index,
                 "retry_count": 0,
                 # "feedback_history": {} # Keep history for audit trail
+                "review_status": "pending" # Reset status for next step
             }
         )
 
@@ -645,6 +800,16 @@ def coordinator_node(state: State) -> Command[Literal["planner", "__end__"]]:
     messages = apply_prompt_template("coordinator", state)
     response = get_llm_by_type(AGENT_LLM_MAP["coordinator"]).invoke(messages)
     content = response.content
+    
+    # [Fix] Handle multimodal content (list of dicts) from Gemini
+    if isinstance(content, list):
+        text_parts = []
+        for part in content:
+            if isinstance(part, dict) and "text" in part:
+                text_parts.append(part["text"])
+            elif isinstance(part, str):
+                text_parts.append(part)
+        content = "".join(text_parts)
     
     logger.debug(f"Coordinator response: {content}")
     logger.debug(f"Coordinator Raw Content: '{content}'")

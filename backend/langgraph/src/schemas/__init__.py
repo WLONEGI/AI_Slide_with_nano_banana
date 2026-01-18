@@ -5,6 +5,7 @@ from .outputs import (
     SlideContent,
     StorywriterOutput,
     ImagePrompt,
+    StructuredImagePrompt,  # v2: Markdown Slide Format
     VisualizerOutput,
     SearchQuery,
     QueryPlannerOutput,
@@ -14,12 +15,26 @@ from .outputs import (
     GenerationConfig,
 )
 
+from .design import (
+    DesignContext,
+    ColorScheme,
+    FontScheme,
+    SlideLayoutInfo,
+    LayoutPlaceholder,
+    BackgroundInfo,
+    LayoutType,
+)
+
+
+
 __all__ = [
+    # Outputs
     "TaskStep",
     "PlannerOutput",
     "SlideContent",
     "StorywriterOutput",
     "ImagePrompt",
+    "StructuredImagePrompt",
     "VisualizerOutput",
     "SearchQuery",
     "QueryPlannerOutput",
@@ -27,4 +42,13 @@ __all__ = [
     "ReviewOutput",
     "ThoughtSignature",
     "GenerationConfig",
+    # Design Context
+    "DesignContext",
+    "ColorScheme",
+    "FontScheme",
+    "SlideLayoutInfo",
+    "LayoutPlaceholder",
+    "BackgroundInfo",
+    "LayoutType",
 ]
+

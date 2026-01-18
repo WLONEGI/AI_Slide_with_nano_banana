@@ -1,12 +1,16 @@
 import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
-from src.service.workflow_service import run_agent_workflow
+from src.service.workflow_service import run_agent_workflow, _manager
 from langchain_core.messages import AIMessage
 
 @pytest.fixture
 def mock_graph():
-    with patch("src.service.workflow_service.graph") as mock:
-        yield mock
+    """WorkflowManager のグラフをモックする"""
+    _manager.initialized = True
+    _manager.graph = MagicMock()
+    yield _manager.graph
+    _manager.initialized = False
+    _manager.graph = None
 
 @pytest.mark.asyncio
 async def test_run_agent_workflow_basic_flow(mock_graph):

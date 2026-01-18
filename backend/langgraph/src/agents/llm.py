@@ -28,7 +28,7 @@ from src.config.env import (
 logger = logging.getLogger(__name__)
 
 def create_openai_llm(
-    model: str, base_url: str = None, api_key: str = None, temperature: float = 0.0
+    model: str, base_url: str | None = None, api_key: str | None = None, temperature: float = 0.0
 ) -> ChatOpenAI:
     return ChatOpenAI(
         model=model,
@@ -38,7 +38,7 @@ def create_openai_llm(
     )
 
 def create_deepseek_llm(
-    model: str, base_url: str = None, api_key: str = None, temperature: float = 0.0
+    model: str, base_url: str | None = None, api_key: str | None = None, temperature: float = 0.0
 ) -> ChatDeepSeek:
     return ChatDeepSeek(
         model=model,
@@ -49,9 +49,9 @@ def create_deepseek_llm(
 
 def create_gemini_llm(
     model: str, 
-    api_key: str = None, 
-    project: str = None,
-    location: str = None,
+    api_key: str | None = None, 
+    project: str | None = None,
+    location: str | None = None,
     temperature: float = 0.0
 ) -> ChatGoogleGenerativeAI:
     """
@@ -64,18 +64,25 @@ def create_gemini_llm(
     # as google-genai client often looks for them.
     if project:
         os.environ["GOOGLE_CLOUD_PROJECT"] = project
+        os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "true"
     if location:
         os.environ["GOOGLE_CLOUD_LOCATION"] = location
     
     # If API key is provided, it will be used (AI Studio).
     # If not, it will fall back to ADC (Vertex AI).
     
-    return ChatGoogleGenerativeAI(
-        model=model,
-        google_api_key=api_key,
-        temperature=temperature,
-        convert_system_message_to_human=False,
-    )
+    kwargs = {
+        "model": model,
+        "temperature": temperature,
+    }
+    if api_key:
+        kwargs["google_api_key"] = api_key
+    elif location:
+        # Explicitly pass location for Vertex AI to prevent defaulting to the runtime region
+        kwargs["location"] = location
+    
+    return ChatGoogleGenerativeAI(**kwargs)
+
 
 
 @lru_cache(maxsize=10)
@@ -111,19 +118,23 @@ def get_llm_by_type(llm_type: str) -> Union[ChatOpenAI, ChatDeepSeek, ChatGoogle
         return create_deepseek_llm(model, base_url, api_key)
     
     if "gemini" in model_lower:
-        # Unified Gemini Logic
+        # Unified Gemini Logic using ONLY Google Gen AI SDK
         logger.info(f"DEBUG: Checking Auth for {llm_type}. ProjectID: {'SET' if VERTEX_PROJECT_ID else 'None'}, APIKey: {'SET' if api_key else 'None'}")
         
         # PRIORITIZE Vertex AI if Project ID is available (User Request)
         if VERTEX_PROJECT_ID:
-            from langchain_google_vertexai import ChatVertexAI
-            logger.info(f"Using Vertex AI (ChatVertexAI) for {llm_type} (model: {model})")
-            return ChatVertexAI(
+            # STRICT RULE: Do NOT use ChatVertexAI. Use ChatGoogleGenerativeAI with Vertex AI Auth.
+            logger.info(f"Using Vertex AI via ChatGoogleGenerativeAI for {llm_type} (model: {model})")
+            
+            # For Vertex AI with google-genai SDK, we typically set env vars or rely on ADC.
+            # ChatGoogleGenerativeAI uses google-genai SDK internally now (v2+).
+            # We explicitly pass None for api_key to ensure it uses ADC/Project.
+            return create_gemini_llm(
                 model=model,
+                api_key=None,  # Force ADC / Vertex Mode
                 project=VERTEX_PROJECT_ID,
                 location=VERTEX_LOCATION or "asia-northeast1",
-                temperature=0.0,
-                convert_system_message_to_human=False
+                temperature=0.0
             )
         # Fallback to API Key (AI Studio)
         elif api_key:

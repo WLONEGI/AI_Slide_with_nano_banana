@@ -1,14 +1,15 @@
 # AIスライド生成システム 要件定義書（確定版）
 
-**文書バージョン:** 3.0（Agentic Workflow Beta）
+**文書バージョン:** 3.2 (Nano Banana Integration)
 **対象モデル:**
 
-* **Visual（画像生成）:** `Gemini 3 Pro Image` (`gemini-3-pro-image-preview`) - **Verified**
-* **Logic/Vision（構成・抽出・補強・擬似OCR）:** `gemini-2.5-flash` - **Verified**
-* **Imagen（画像生成）:** `Gemini 3 Pro Image` (`gemini-3-pro-image-preview`) - **Verified**
+* **Visual（画像生成）:** `Gemini 3.0 Pro Image` (Nano Banana Pro)
+* **Logic/Vision:** `gemini-2.5-flash` (Reasoning Agent)
+* **Data Analysis:** `gemini-2.5-flash` (Data Analyst Agent)
 
 **ステータス:**
-LangGraphによるエージェンティック・ワークフロー（Refiner, Code Worker）を実装済み。
+Plan-Driven Architecture (Coordinator, Planner, Researcher, Data Analyst, Storywriter, Visualizer) 実装完了・検証済み。
+**"Visual Blueprinting"** によるデータ駆動型の作画計画、および **"Deep Edit"** による一貫性のある修正フローが実装されています。
 
 ---
 
@@ -85,7 +86,7 @@ LangGraphによるエージェンティック・ワークフロー（Refiner, Co
    * 用途：デザインスタイル（色、背景、余白、レイアウト傾向）の抽出用
 4. **参考資料（任意）:** PDF等
 
-   * 用途：Director / Grounding のコンテキスト入力として利用（要約・補強目的）
+   * 用途：Planner / Grounding のコンテキスト入力として利用（要約・補強目的）
 
 ### 4.2 データの優先順位（信用ラベル）
 
@@ -121,9 +122,9 @@ LangGraphによるエージェンティック・ワークフロー（Refiner, Co
   * PPTXあり：抽出した特徴（色、背景、余白、レイアウト傾向）を継承
   * PPTXなし：デッキ全体で統一されたテーマを自動生成
 
-### 5.3 PPTX準拠仕様（Style Extractor）
+### 5.3 デザインスタイル定義（Visualizer）
 
-PPTXから以下の要素を抽出し、生成に反映する。
+Visualizerが以下の要素を定義し、生成プロンプトに反映する。
 
 * 色：主要色、アクセントカラー
 * 背景：色、パターンの傾向
@@ -135,43 +136,70 @@ PPTXから以下の要素を抽出し、生成に反映する。
 
 ---
 
-## 6. システムアーキテクチャ・ワークフロー (Ver 3.0)
+## 6. システムアーキテクチャ・ワークフロー (Ver 3.1 - Plan-Driven Architecture)
 
-**LangGraphによるステートフル・マルチエージェント・アーキテクチャ**を採用。
+LangGraphを用いた「計画駆動型（Plan-Driven）」のステートフルなマルチエージェント・アーキテクチャを採用し、高品質なスライド生成を実現しています。
 
-### 6.1 コンポーネント構成
+### 6.1 フロー概要
 
-* **Logic/Vision Model:** `gemini-2.5-flash`
-* **Visual Model:** Gemini 3 Pro Image (`gemini-3-pro-image-preview`)
+```mermaid
+graph TD
+    START --> coordinator[Coordinator<br>司令塔・判断]
+    
+    coordinator -->|handoff_to_planner| planner[Planner<br>高度な計画立案]
+    coordinator -->|conversation| END
+    
+    planner --> supervisor[Supervisor<br>進行管理]
+    
+    supervisor -->|dispatch| researcher[Researcher<br>調査・裏付け]
+    supervisor -->|dispatch| data_analyst[Data Analyst<br>視覚的設計図]
+    supervisor -->|dispatch| storywriter[Storywriter<br>構成・ライティング]
+    supervisor -->|dispatch| visualizer[Visualizer<br>画像プロンプト生成]
+    supervisor -->|dispatch| coder[Coder<br>データ可視化]
+    supervisor -->|FINISH| END
 
-### 6.2 処理フロー詳細
+    researcher --> supervisor
+    data_analyst --> supervisor
+    storywriter --> supervisor
+    visualizer --> supervisor
+    coder --> supervisor
+```
 
-#### Phase 1: Planning (頭脳)
+### 6.2 各ノードの役割
 
-1. **Director (Planner):**
-   - ユーザー入力とStyleDefをもとに、ストーリーライン（構成案）を作成。
-2. **Refiner (Critic) [NEW]:**
-   - Directorの案を自己批評。「Less is More」「Visual Impact」の観点で修正。
-   - **Tool Selection:** 各スライドに対し、`imagen`（画像生成）か `code_interpreter`（グラフ描画）かを判断。
+1.  **Coordinator (司令塔: Generative Gatekeeper)**
+    *   ユーザーとの対話の入り口。厳格なゲートキーパーとして機能します。
+    *   ユーザー入力を「雑談」「情報不足」「作成依頼」に分類し、必要な情報（ターゲット、目的等）が揃うまでPlannerへ引き継ぎを行いません。
 
-#### Phase 2: Execution (手足)
+2.  **Planner (計画立案: Master Strategist)**
+    *   CoT (Chain-of-Thought) を用いて、オーディエンス分析とストーリーラインを設計します。
+    *   「調査(Researcher) → 構成(Storywriter) → 視覚化(Visualizer)」という標準的かつ強力な3ステップの実行計画（`JSON Execution Plan`）を策定します。
+    *   後続のエージェントに対し、**一貫した「トーン＆マナー」や「視覚コンセプト」を下達**します。
 
-3. **Visual Router [NEW]:**
-   - Refinerの指示に基づき、Workerを振り分け。
-4. **Worker Selection:**
-   - **Imagen Worker:** 画像生成のみでスライドを作成（抽象、写真、テキスト）。
-   - **Code Worker [NEW]:** Python (Matplotlib/Plotly) を実行し、正確なグラフ・チャート画像を生成。
-5. **Quality Gate:**
-   - 生成結果の可読性（OCR）をチェックし、NGならリトライ（最大2回）。
+3.  **Supervisor (進行管理)**
+    *   Plannerが作成した計画を厳密に遂行する決定論的（Deterministic）な管理者です。
+    *   各ステップの完了を確認し、成果物をState（共有メモリ）に蓄積しながら次へ進めます。
 
-#### Phase 3: Assembly
+4.  **Workers (専門実務部隊)**
+    *   **Researcher:** Tavily等を活用し、スライドの信頼性を高めるための市場データ、統計、用語定義、引用句を収集し、レポート化します。
+    *   **Data Analyst (New):** Researcherが集めた生データを分析し、最適なグラフ種類やインフォグラフィックの構造を決定する「視覚的設計図 (Visual Blueprint)」を出力します。
+    *   **Storywriter:** 収集された情報を元に、**「1スライド1メッセージ」**の原則に従ってスライド構成案（タイトル＋箇条書き）を作成します。
+    *   **Visualizer (Ver 2.0):** Gemini 3.0 Pro Imageのために最適化された「Context Injection」型プロンプトを生成します。役割・文脈・論理・スタイル・制約の5要素を注入し、高度な推論を画像生成に反映させます。また、**"Thinking Signature"** (Seed/Prompt履歴) を管理し、一貫性のある修正編集を実現します。
+    *   **Coder:** 必要に応じてPython (Matplotlib/Plotly) で正確なチャートを描画します。
 
-6. **Assembler:**
-   - 合格した画像をPDFに結合して出力。
+### 6.3 処理フロー詳細
 
-### 6.2.1 Emotional Loading (UX連携)
-バックエンドの `refinement_log` や処理ステップをリアルタイムでフロントエンドに通知し、
-「Refinerが構成を推敲中...」「Code Workerがグラフを描画中...」といった思考プロセスを表示する。
+#### Phase 1: Interaction & Planning (頭脳)
+*   **Coordinator:** ユーザー意図の理解と振り分け。
+*   **Planner:** 「何を」「どの順序で」行うかの戦略策定。
+
+#### Phase 2: Execution & Output (手足・生成)
+*   **Supervisor:** 動的なエージェント割り当て。
+*   **Workers:** 調査、計算、生成の実実行。
+    *   *Note:* スライド生成や画像生成などの特定タスクも、今後Workerとして統合または連携して実行されます。
+
+### 6.4 Emotional Loading (UX連携)
+バックエンドの処理ステップ（現在のノードや実行内容）をリアルタイムでフロントエンドに通知し、ユーザーに対し「AIが今何をしているか」を可視化することで、待ち時間のストレスを軽減します。
 
 ---
 
@@ -198,17 +226,7 @@ PPTXから以下の要素を抽出し、生成に反映する。
 
 ### 7.2 機能要件詳細（New）
 
-#### 7.2.1 Precision Edit（Inpainting / 部分修正）
-スライド全体を作り直すのではなく、**「背景や構図はそのままに、特定の文字やオブジェクトだけを修正する」**機能。
 
-*   **目的:** 「完璧なレイアウトが出たのに、誤字が一つあるだけで全生成してデザインが変わってしまう」というリスク（UX Friction）を排除する。
-*   **UI操作:**
-    *   領域選択: プレビュー画面上で、修正したい箇所をマウスでドラッグ（矩形選択）。
-    *   指示入力: 選択範囲に対して、チャットまたはポップアップで修正指示を出す（例：「ここを『市場推移』に書き換えて」）。
-*   **技術挙動:**
-    *   モデル: `Gemini 3 Pro Image` (Imagen 3) の Inpainting (Edit Mode) 機能を使用。
-    *   入力: Original Image + Mask Image (User Selection) + Prompt
-    *   処理: マスクされていない領域（背景や他の要素）を完全に維持したまま、マスク内のみを再描画する。
 
 #### 7.2.2 Emotional Loading（思考プロセスの演出）
 生成待ち時間（数分）の離脱を防ぎ、ユーザーに「AIが自分のために働いている」という安心感（Agency）を与えるための演出。
@@ -216,7 +234,7 @@ PPTXから以下の要素を抽出し、生成に反映する。
 *   **目的:** ブラックボックスな待ち時間を「可視化されたプロセス」に変え、体感待ち時間を短縮する。
 *   **UI表示:** チャット画面またはステータスエリアに、AIの「独り言（思考ログ）」を流れるように表示する。機械的なプログレスバーではなく、人間味のある自然言語で表示する。
 *   **技術挙動:**
-    *   モデル: `gemini-2.5-flash` (Logic)
+    *   モデル: `gemini-2.5-flash-001` (Logic)
     *   処理: メインの画像生成処理とは別に**並列（非同期）**で実行。現在のシステム処理状態（Step）を入力とし、ユーザー向けの「演出テキスト」をリアルタイム生成して表示する。
 
 ### 7.3 ユーザーフロー（UXステップ）
@@ -264,7 +282,7 @@ PPTXから以下の要素を抽出し、生成に反映する。
   * 指示入力、履歴表示に加え、**「AIの思考ログ」**が流れるタイムライン。
 * **Right Pane (Preview & Edit):**
   * 生成されたスライドのプレビュー。
-  * **[Edit Mode]** ボタンを配置。押下するとカーソルが選択ツールに切り替わり、Inpainting用のマスク作成が可能になる。
+  * 生成されたスライドのプレビュー。
 
 ---
 
@@ -272,7 +290,7 @@ PPTXから以下の要素を抽出し、生成に反映する。
 
 ### 8.1 判定ロジック
 
-`gemini-2.5-flash`（Vision）による「擬似OCR」で二値判定。
+`gemini-2.5-flash-001`（Vision）による「擬似OCR」で二値判定。
 
 * **対象:** `text_expected = true` のスライドのみ
 * **入力:** スライド画像（PNG/JPEG）
@@ -300,7 +318,7 @@ PPTXから以下の要素を抽出し、生成に反映する。
 ### 8.4 NG時の挙動（確定）
 
 * **自動再生成:** 最大 **N=2回**
-* **自動再生成:** 最大 **N=2回**
+
 * **改善策:** 再生成プロンプトに可読性向上指示（例: “high contrast text, simple background”）を自動追加 **[Ultrathinking: NG理由に応じた動的指示出し機能を含む]**
 * **フォールバック:** N回失敗した場合、NG画像のまま採用し、ユーザーの手動再生成に委ねる（無限ループ防止）
 
@@ -311,13 +329,15 @@ PPTXから以下の要素を抽出し、生成に反映する。
 ### 9.1 生成機能
 
 * 入力からスライド一式（既定10枚または指定枚数）を生成
-* Style Extractor と Director の連携により、デザインと構成の整合性を担保する
+* Visualizer と Planner の連携により、デザインと構成の整合性を担保する
 
 ### 9.2 再生成機能
 
-* **単位:** スライドID指定による単枚再生成
-* **入力:** ユーザーによる修正プロンプト
-* **維持項目:** スタイル（`StyleDef`）は維持し、内容（`SlidePlan`）のみ更新する
+* **単位:** スライドID指定による単枚再生成（Refinement Mode）
+* **入力:** ユーザーによる修正プロンプト（例：「もっと明るい色にして」「グラフを棒グラフに変更して」）
+* **Deep Edit (New):**
+    *   **Thinking Signature:** 過去の生成時のSeedとPrompt履歴を引き継ぎ、変更点以外の一貫性を保持する。
+    *   **Reference Anchor:** アスペクト比修正（16:9強制）や特定のビジュアル要素を固定するための参照画像を自動適用する。
 
 ### 9.3 Sourcesスライド生成（確定）
 
@@ -374,3 +394,14 @@ PPTXから以下の要素を抽出し、生成に反映する。
 * 代表レイアウト3パターンの抽出・分類ルールの調整（PPTXの多様性に応じて）
 
 ---
+
+## 13. デザインガイドライン (Visual Design)
+
+* **モノクローム基調:** 白、グレー、黒をベースとした「クリーン、ミニマル、タイムレス」な配色を採用しています。コンテンツ（生成物）が主役となるよう、UI自体の主張は抑えられています。
+
+* **モダンなサンセリフ体:** 可読性の高い、現代的なゴシック系フォント（サンセリフ）が使用され、情報の整理がなされています。
+
+### 13.1 レイアウト構成
+
+* **2ペイン（分割）構成:**
+  チャット/指示エリア（左側）とワークスペース/プレビューエリア（右側）の分割表示を採用し、対話と生成結果の確認をシームレスに行えるようにしています。

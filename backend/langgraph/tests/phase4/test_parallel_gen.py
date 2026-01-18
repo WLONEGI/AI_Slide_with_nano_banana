@@ -9,16 +9,16 @@ from src.graph.graph_types import State
 
 @pytest.fixture
 def mock_dependencies():
-    with patch("src.utils.image_generation.generate_image") as mock_gen, \
-         patch("src.utils.storage.upload_to_gcs") as mock_upload, \
-         patch("src.utils.storage.download_blob_as_bytes") as mock_download, \
+    with patch("src.graph.nodes.generate_image") as mock_gen, \
+         patch("src.graph.nodes.upload_to_gcs") as mock_upload, \
+         patch("src.graph.nodes.download_blob_as_bytes") as mock_download, \
          patch("src.graph.nodes.apply_prompt_template") as mock_tmpl, \
          patch("src.graph.nodes.get_llm_by_type") as mock_get_llm:
          
         # Simulate latency in generate_image (0.1s per image)
         def delayed_gen(*args, **kwargs):
             time.sleep(0.1) # Simulate blocking IO (wrapped in to_thread)
-            return b"image_bytes"
+            return (b"image_bytes", None)  # (bytes, token)
             
         mock_gen.side_effect = delayed_gen
         mock_upload.return_value = "https://gcs/uploaded.png"
@@ -110,7 +110,7 @@ async def test_it06_parallel_error_handling(mock_dependencies):
     def side_effect(prompt, **kwargs):
         if "Bad" in prompt:
             raise ValueError("Simulated Generation Error")
-        return b"image_bytes"
+        return (b"image_bytes", None)  # (bytes, token)
     
     mock_gen.side_effect = side_effect
 

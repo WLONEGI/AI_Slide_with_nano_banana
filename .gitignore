@@ -1,0 +1,38 @@
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+
+# Editors
+.idea/
+.vscode/
+*.swp
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Secrets & Local Config
+.env
+.env.*
+!.env.example
+credentials.json
+
+# Binaries/Tools
+cloud-sql-proxy
+
+# Build artifacts
+build/
+dist/
+wheels/
+*.egg-info
+
+# Logs
+*.log

@@ -1,29 +1,30 @@
 import logging
+import uuid
+from typing import Any, AsyncGenerator
 
-from src.config import TEAM_MEMBERS
-from src.graph import build_graph
 from langchain_community.adapters.openai import convert_message_to_dict
 from langgraph.checkpoint.memory import MemorySaver
-import uuid
-from typing import Final, AsyncGenerator, Any
 
 from src.config.env import POSTGRES_DB_URI
+from src.config import TEAM_MEMBERS
+from src.config.settings import settings
+from src.graph import build_graph
 
+# Try importing Postgres dependencies
 try:
     from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
     from psycopg_pool import AsyncConnectionPool
     HAS_POSTGRES_DEPS = True
 except ImportError:
     HAS_POSTGRES_DEPS = False
-    logger = logging.getLogger(__name__)
-    if POSTGRES_DB_URI:
-        logger.warning("POSTGRES_DB_URI is set but postgres dependencies (langgraph-checkpoint-postgres, psycopg_pool) are missing.")
+
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,  # Default level is INFO
+    level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
+logger = logging.getLogger(__name__)
 
 
 def enable_debug_logging():
@@ -31,53 +32,102 @@ def enable_debug_logging():
     logging.getLogger("src").setLevel(logging.DEBUG)
 
 
-logger = logging.getLogger(__name__)
 
-# Global instances
-graph = build_graph(checkpointer=MemorySaver()) # Default fallback
-_pool = None
+class WorkflowManager:
+    """
+    Singleton manager for the LangGraph workflow and its resources (DB connection, Graph instance).
+    Eliminates global variables and ensures safe initialization/cleanup.
+    """
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance.initialized = False
+            cls._instance.pool = None
+            cls._instance.graph = None
+        return cls._instance
+
+    async def initialize(self):
+        """
+        Initialize the graph with appropriate checkpointer.
+        Idempotent: Safe to call multiple times, though usually called once at startup.
+        """
+        if self.initialized:
+            logger.info("WorkflowManager already initialized.")
+            return
+
+        logger.info("Initializing WorkflowManager...")
+
+        if POSTGRES_DB_URI:
+            if not HAS_POSTGRES_DEPS:
+                error_msg = (
+                    "POSTGRES_DB_URI is set but postgres dependencies "
+                    "(langgraph-checkpoint-postgres, psycopg_pool) are missing. "
+                    "Cannot establish persistence."
+                )
+                logger.critical(error_msg)
+                raise ImportError(error_msg)
+
+            logger.info("Initializing Postgres Checkpointer...")
+            try:
+                # Create connection pool
+                connection_info = POSTGRES_DB_URI.replace("postgresql+psycopg://", "postgresql://")
+                
+                # Cloud Run / Serverless optimized pool settings
+                self.pool = AsyncConnectionPool(
+                    conninfo=connection_info,  
+                    min_size=1, 
+                    max_size=10, 
+                    open=False,
+                    timeout=30.0
+                )
+                await self.pool.open()
+                
+                # Setup checkpointer
+                checkpointer = AsyncPostgresSaver(self.pool)
+                await checkpointer.setup()
+                
+                # Build graph
+                self.graph = build_graph(checkpointer=checkpointer)
+                logger.info("✅ Graph initialized with AsyncPostgresSaver. Persistence enabled.")
+                
+            except Exception as e:
+                logger.critical(f"❌ Failed to initialize Postgres persistence: {e}")
+                logger.critical("Aborting startup to prevent state loss.")
+                if self.pool:
+                    await self.pool.close()
+                raise e
+        else:
+            logger.warning("⚠️ POSTGRES_DB_URI not set. Using MemorySaver (Non-persistent). State will be lost on restart.")
+            self.graph = build_graph(checkpointer=MemorySaver())
+
+        self.initialized = True
+
+    async def close(self):
+        """Cleanup resources."""
+        if self.pool:
+            logger.info("Closing DB connection pool...")
+            await self.pool.close()
+            self.pool = None
+        self.initialized = False
+        logger.info("WorkflowManager shutdown complete.")
+
+    def get_graph(self):
+        """Return the initialized graph instance."""
+        if not self.graph:
+            raise RuntimeError("Graph not initialized. Call initialize() first.")
+        return self.graph
+
+
+# Expose singleton instance methods for existing API compatibility
+_manager = WorkflowManager()
 
 async def initialize_graph():
-    """Initialize the graph with appropriate checkpointer."""
-    global graph, _pool
-    
-    if POSTGRES_DB_URI and HAS_POSTGRES_DEPS:
-        logger.info("Initializing Postgres Checkpointer...")
-        try:
-            # Create connection pool
-            # psycopg expects postgresql:// scheme, not sqlalchemy's postgresql+psycopg://
-            conn_info = POSTGRES_DB_URI.replace("postgresql+psycopg://", "postgresql://")
-            _pool = AsyncConnectionPool(conninfo=conn_info, min_size=1, max_size=10, open=False)
-            await _pool.open()
-            
-            # Setup checkpointer
-            checkpointer = AsyncPostgresSaver(_pool)
-            await checkpointer.setup()
-            
-            # Build graph with postgres checkpointer
-            graph = build_graph(checkpointer=checkpointer)
-            logger.info("Graph initialized with AsyncPostgresSaver.")
-        except Exception as e:
-            logger.error(f"Failed to initialize Postgres persistence: {e}")
-            logger.warning("Falling back to MemorySaver.")
-            graph = build_graph(checkpointer=MemorySaver())
-    else:
-        logger.info("Using MemorySaver (Non-persistent).")
-        graph = build_graph(checkpointer=MemorySaver())
+    await _manager.initialize()
 
 async def close_graph():
-    """Cleanup resources."""
-    global _pool
-    if _pool:
-        await _pool.close()
-
-
-# Cache for coordinator messages
-
-# Cache for coordinator messages - Removed globals to ensure thread safety
-from src.config.settings import settings
-
-
+    await _manager.close()
 
 async def run_agent_workflow(
     user_input_messages: list[dict[str, Any]],
@@ -85,60 +135,48 @@ async def run_agent_workflow(
     deep_thinking_mode: bool = False,
     search_before_planning: bool = False,
     thread_id: str | None = None,
-):
-    """Run the agent workflow with the given user input.
-
-    Args:
-        user_input_messages: The user request messages (list of dicts).
-        debug: If True, enables debug level logging.
-        deep_thinking_mode: Whether to enable extended reasoning.
-        search_before_planning: Whether to perform an initial search before planning.
-        thread_id: Identifier for the conversation thread (persistence).
-
-    Yields:
-        dict: A dictionary containing event data with the following structure:
-            - event (str): Event type (e.g., 'start_of_workflow', 'message', 'tool_call').
-            - data (dict): Event payload.
-    """
+    design_context: Any = None,
+) -> AsyncGenerator[dict[str, Any], None]:
+    """Run the agent workflow with the given user input."""
     if not user_input_messages:
         raise ValueError("Input could not be empty")
 
     if debug:
         enable_debug_logging()
 
+    # Get graph from manager
+    graph = _manager.get_graph()
+
     # Use provided thread_id or generate a new one
     if not thread_id:
         thread_id = str(uuid.uuid4())
 
     logger.info(f"Starting workflow with user input: {user_input_messages} (Thread ID: {thread_id})")
+    
+    if design_context:
+        logger.info(f"DesignContext provided: {len(design_context.layouts)} layouts")
 
-    # Workflow ID identifies this specific execution run
+    # Workflow ID identifies this specific execution run (for logging tools/agents)
+    # Note: thread_id is for persistence, workflow_id is for trace/log uniqueness of this run.
     workflow_id = str(uuid.uuid4())
 
     streaming_llm_agents = [*TEAM_MEMBERS, "planner", "coordinator"]
 
-    # Reset coordinator cache at the start of each workflow
-    # Use local variables for thread safety
+    # Thread-safe local variables for coordinator logic
     coordinator_cache: list[str] = []
     is_handoff_case: bool = False
     
     # Configure persistence
     config = {"configurable": {"thread_id": thread_id}}
 
-    # When a thread_id is present, passing 'messages' in the input dict
-    # will APPEND to the existing message history in the state (due to MessagesState reducer).
-    # This triggers the graph to start from the entry point (coordinator) again,
-    # but with the full context (past conversation + new user instruction).
     input_state = {
-        # Constants
         "TEAM_MEMBERS": TEAM_MEMBERS,
-        # Runtime Variables
         "messages": user_input_messages,
         "deep_thinking_mode": deep_thinking_mode,
         "search_before_planning": search_before_planning,
+        "design_context": design_context,
     }
 
-    # TODO: extract message content from object, specifically for on_chat_model_stream
     async for event in graph.astream_events(
         input_state,
         config=config,
@@ -170,7 +208,7 @@ async def run_agent_workflow(
                         "input": user_input_messages
                     },
                 }
-            ydata = {
+            yield_payload = {
                 "event": "start_of_agent",
                 "data": {
                     "agent_name": name,
@@ -178,7 +216,7 @@ async def run_agent_workflow(
                 },
             }
         elif kind == "on_chain_end" and name in streaming_llm_agents:
-            ydata = {
+            yield_payload = {
                 "event": "end_of_agent",
                 "data": {
                     "agent_name": name,
@@ -186,22 +224,30 @@ async def run_agent_workflow(
                 },
             }
         elif kind == "on_chat_model_start" and node in streaming_llm_agents:
-            ydata = {
+            yield_payload = {
                 "event": "start_of_llm",
                 "data": {"agent_name": node},
             }
         elif kind == "on_chat_model_end" and node in streaming_llm_agents:
-            ydata = {
+            yield_payload = {
                 "event": "end_of_llm",
                 "data": {"agent_name": node},
             }
         elif kind == "on_chat_model_stream" and node in streaming_llm_agents:
             content = data["chunk"].content
+            if isinstance(content, list):
+                text_parts = []
+                for part in content:
+                    if isinstance(part, dict) and "text" in part:
+                        text_parts.append(part["text"])
+                    elif hasattr(part, "text"):
+                        text_parts.append(part.text)
+                content = "".join(text_parts)
+
             if content is None or content == "":
                 if not data["chunk"].additional_kwargs.get("reasoning_content"):
-                    # Skip empty messages
                     continue
-                ydata = {
+                yield_payload = {
                     "event": "message",
                     "data": {
                         "message_id": data["chunk"].id,
@@ -213,7 +259,6 @@ async def run_agent_workflow(
                     },
                 }
             else:
-                # Check if the message is from the coordinator
                 if node == "coordinator":
                     if len(coordinator_cache) < settings.MAX_COORD_CACHE_SIZE:
                         coordinator_cache.append(content)
@@ -223,8 +268,7 @@ async def run_agent_workflow(
                             continue
                         if len(coordinator_cache) < settings.MAX_COORD_CACHE_SIZE:
                             continue
-                        # Send the cached message
-                        ydata = {
+                        yield_payload = {
                             "event": "message",
                             "data": {
                                 "message_id": data["chunk"].id,
@@ -232,8 +276,7 @@ async def run_agent_workflow(
                             },
                         }
                     elif not is_handoff_case:
-                        # For other agents, send the message directly
-                        ydata = {
+                        yield_payload = {
                             "event": "message",
                             "data": {
                                 "message_id": data["chunk"].id,
@@ -241,8 +284,7 @@ async def run_agent_workflow(
                             },
                         }
                 else:
-                    # For other agents, send the message directly
-                    ydata = {
+                    yield_payload = {
                         "event": "message",
                         "data": {
                             "message_id": data["chunk"].id,
@@ -250,7 +292,7 @@ async def run_agent_workflow(
                         },
                     }
         elif kind == "on_tool_start" and node in TEAM_MEMBERS:
-            ydata = {
+            yield_payload = {
                 "event": "tool_call",
                 "data": {
                     "tool_call_id": f"{workflow_id}_{node}_{name}_{run_id}",
@@ -259,7 +301,7 @@ async def run_agent_workflow(
                 },
             }
         elif kind == "on_tool_end" and node in TEAM_MEMBERS:
-            ydata = {
+            yield_payload = {
                 "event": "tool_call_result",
                 "data": {
                     "tool_call_id": f"{workflow_id}_{node}_{name}_{run_id}",
@@ -269,7 +311,7 @@ async def run_agent_workflow(
             }
         else:
             continue
-        yield ydata
+        yield yield_payload
 
     if is_handoff_case:
         yield {
