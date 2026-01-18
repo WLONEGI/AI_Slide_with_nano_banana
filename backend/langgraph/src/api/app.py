@@ -285,3 +285,73 @@ async def analyze_template_endpoint(file: UploadFile = File(...)):
             detail=f"Failed to analyze template: {str(e)}"
         )
 
+
+# --- [NEW] Features: History & In-painting ---
+
+@app.get("/api/history")
+async def get_history(uid: str | None = None):
+    """
+    Get conversation history for the sidebar.
+    
+    Args:
+        uid: User ID (Firebase UID) to filter history. 
+             Currently, without Auth middleware, this is trusted from client.
+    
+    Returns:
+        List of session summaries.
+    """
+    # TODO: Implement actual DB query to 'checkpoints' table or similar.
+    # Since we are using AsyncPostgresSaver, we need a way to list threads.
+    # For now, returning a mock list to unblock Frontend development.
+    
+    mock_history = [
+        {
+            "id": "thread_demo_1",
+            "title": "日本の経済成長プレゼン",
+            "timestamp": "2024-01-20T10:00:00Z",
+            "summary": "AI generated slide deck about Japan's economy."
+        },
+        {
+            "id": "thread_demo_2",
+            "title": "US vs China Tech War",
+            "timestamp": "2024-01-19T15:30:00Z",
+            "summary": "Comparison of technology sectors."
+        }
+    ]
+    return mock_history
+
+
+class InpaintRequest(BaseModel):
+    rect: dict[str, int] = Field(..., description="Selection rectangle {x, y, w, h}")
+    prompt: str = Field(..., description="Modification instruction")
+
+
+@app.post("/api/image/{image_id}/inpaint")
+async def inpaint_image(image_id: str, request: InpaintRequest):
+    """
+    Apply In-painting / Deep Edit to a generated image.
+    
+    Args:
+        image_id: ID (or URL/filename) of the target image.
+        request: Inpaint parameters.
+        
+    Returns:
+        JSON with new image information or confirmation.
+    """
+    logger.info(f"In-painting request for {image_id}: {request.prompt} at {request.rect}")
+    
+    # TODO: Integrate with backend agent/tool.
+    # Options:
+    # 1. Direct call to Vertex AI Imagen 2 Edit API.
+    # 2. Trigger a LangGraph run with "Modify Slide X..." instruction.
+    
+    # For Phase 1, we acknowledge the request. 
+    # Real implementation requires 'image_service' (TBD).
+    
+    return {
+        "success": True,
+        "message": "In-painting request received (Backend stub).",
+        "new_image_url": None, # Should return new URL when implemented
+        "original_image_id": image_id
+    }
+

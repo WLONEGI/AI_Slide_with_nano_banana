@@ -31,7 +31,7 @@ Before generating the JSON, think:
     *   Visualize -> Visualizer (with theme & data blueprints).
 
 # Output Format
-Return **ONLY** a valid JSON object with a `steps` array.
+Return **ONLY** a valid JSON object with a `steps` array and optionally `research_tasks`.
 
 ```json
 {
@@ -39,23 +39,30 @@ Return **ONLY** a valid JSON object with a `steps` array.
     {
       "id": 1,
       "role": "researcher",
-      "instruction": "Research the latest market size of Generative AI in Japan (2023-2025). Focus on growth rates and key players.",
-      "description": "Gather market justification.",
+      "instruction": "Conduct multi-faceted research on Generative AI market in Japan.",
+      "description": "Market research phase.",
       "design_direction": null
     },
     {
       "id": 2,
       "role": "storywriter",
-      "instruction": "Draft 3 slides. Target Audience: Executives. Tone: Professional & Urgent. Reference the data from Step 1. Structure: 1. The Opportunity (Market Size), 2. The Gap, 3. Our Solution.",
-      "description": "Draft narrative outline.",
-      "design_direction": null
+      ...
+    }
+  ],
+  "research_tasks": [
+    {
+      "id": 1,
+      "perspective": "Market Size & Growth",
+      "query_hints": ["Generative AI Japan market size 2024", "CAGR forecast"],
+      "priority": "high",
+      "expected_output": "Quantitative data table with sources."
     },
     {
-      "id": 3,
-      "role": "visualizer",
-      "instruction": "Generate prompt for all slides.",
-      "description": "Design slide visuals.",
-      "design_direction": "Visual Theme: 'Future-Corporate'. Color Palette: Deep navy background with neon blue and white accents. Style: Glassmorphism, sleek lines, high-tech feel. Mood: Trustworthy and innovative."
+      "id": 2,
+      "perspective": "Key Players",
+      "query_hints": ["Major GenAI companies Japan", "Startups vs Big Tech"],
+      "priority": "medium",
+      "expected_output": "List of companies and their core products."
     }
   ]
 }

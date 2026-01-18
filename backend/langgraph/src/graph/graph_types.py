@@ -1,9 +1,10 @@
-from typing import Literal, TypedDict, Any
+from typing import Literal, TypedDict, Any, List, Annotated
+import operator
 from langgraph.graph import MessagesState
 
 
 from src.schemas.design import DesignContext
-
+from src.schemas.outputs import ResearchTask, ResearchResult
 
 
 
@@ -42,4 +43,8 @@ class State(MessagesState):
     
     # NEW: PPTXテンプレートデザインコンテキスト
     design_context: DesignContext | None
+
+    # NEW: Parallel Research Tasks
+    research_tasks: List[ResearchTask]
+    research_results: Annotated[List[ResearchResult], operator.add]
 

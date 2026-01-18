@@ -13,6 +13,8 @@ from .outputs import (
     ReviewOutput,
     ThoughtSignature,
     GenerationConfig,
+    ResearchTask,
+    ResearchResult,
 )
 
 from .design import (
@@ -42,6 +44,8 @@ __all__ = [
     "ReviewOutput",
     "ThoughtSignature",
     "GenerationConfig",
+    "ResearchTask",
+    "ResearchResult",
     # Design Context
     "DesignContext",
     "ColorScheme",

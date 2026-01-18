@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     
     # Concurrency limits
     VISUALIZER_CONCURRENCY: int = 5
+    RESEARCHER_CONCURRENCY: int = 3
     
     # Recursion limits
     RECURSION_LIMIT_WORKFLOW: int = 50

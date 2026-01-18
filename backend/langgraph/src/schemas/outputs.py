@@ -24,6 +24,11 @@ class TaskStep(BaseModel):
 class PlannerOutput(BaseModel):
     """Plannerノードの出力"""
     steps: List[TaskStep] = Field(description="実行計画のステップリスト")
+    # [NEW] 並列調査タスク（オプション）
+    research_tasks: Optional[List['ResearchTask']] = Field(
+        default=None,
+        description="並列実行する調査タスクのリスト（role='researcher'のステップがある場合に使用）"
+    )
 
 
 
@@ -249,3 +254,21 @@ class ReviewOutput(BaseModel):
     score: float = Field(description="品質スコア (0.0 - 1.0)")
     feedback: str = Field(description="改善のための具体的なフィードバック、または承認時のコメント")
 
+
+# === Parallel Researcher Schemas ===
+class ResearchTask(BaseModel):
+    """調査タスク（Plannerが生成）"""
+    id: int = Field(description="タスクID")
+    perspective: str = Field(description="調査観点（例: 市場規模、技術動向）")
+    query_hints: List[str] = Field(description="検索クエリのヒント（最大3つ）")
+    priority: Literal["high", "medium", "low"] = Field(default="medium")
+    expected_output: str = Field(description="期待する出力形式の説明")
+
+
+class ResearchResult(BaseModel):
+    """調査結果（Workerが生成）"""
+    task_id: int = Field(description="対応するタスクID")
+    perspective: str = Field(description="調査観点")
+    report: str = Field(description="Markdown形式のレポート（引用付き）")
+    sources: List[str] = Field(description="参照URL一覧")
+    confidence: float = Field(description="信頼度スコア (0.0-1.0)")

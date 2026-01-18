@@ -6,7 +6,7 @@ from copy import deepcopy
 from typing import Literal, Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langgraph.types import Command
+from langgraph.types import Command, Send
 
 from src.agents import research_agent, storywriter_agent, visualizer_agent
 from src.agents.llm import get_llm_by_type
@@ -25,6 +25,8 @@ from src.schemas import (
     ThoughtSignature,
     ImagePrompt,
     StructuredImagePrompt,
+    ResearchTask,     # NEW
+    ResearchResult,   # NEW
 )
 from src.utils.image_generation import generate_image
 from src.utils.storage import upload_to_gcs, download_blob_as_bytes
@@ -824,4 +826,150 @@ def coordinator_node(state: State) -> Command[Literal["planner", "__end__"]]:
     return Command(
         update={"messages": [HumanMessage(content=content, name="coordinator")]},
         goto="__end__"
+    )
+
+
+# === Parallel Researcher Nodes ===
+
+def research_dispatcher_node(state: State) -> dict:
+    """
+    Dispatcher node for parallel research.
+    Prepares tasks for the fan-out edge.
+    If 'research_tasks' is empty (legacy plan), creates a single task from the instruction.
+    Returning dict to update state, allowing conditional edge to run next.
+    """
+    logger.info("Research Dispatcher: Preparing tasks...")
+    
+    # 1. Check for existing tasks from Planner
+    tasks = state.get("research_tasks", [])
+    
+    # 2. If empty, create legacy single task (Backward Compatibility)
+    if not tasks:
+        current_step = state["plan"][state["current_step_index"]]
+        legacy_task = ResearchTask(
+            id=0,
+            perspective="General Investigation",
+            query_hints=[], 
+            priority="medium",
+            expected_output=f"Detailed report based on: {current_step['instruction']}"
+        )
+        tasks = [legacy_task]
+        logger.info("Created legacy single task for research.")
+    
+    # 3. Update State (Clear previous results)
+    return {
+        "research_tasks": tasks,
+        "research_results": [] 
+    }
+
+
+def fan_out_research(state: State) -> list[Send]:
+    """Conditional edge logic for fanning out research tasks to workers."""
+    tasks = state.get("research_tasks", [])
+    logger.info(f"Fanning out {len(tasks)} research tasks.")
+    
+    return [
+        Send("research_worker", {"task": task}) 
+        for task in tasks
+    ]
+
+
+def research_worker_node(state: dict) -> dict:
+    """
+    Worker node for executing a single research task.
+    Receives only the specific 'task' payload (not full state).
+    """
+    task: ResearchTask = state.get("task")
+    if not task:
+        # Fallback or error handling
+        return {"research_results": []}
+
+    logger.info(f"Worker executing task {task.id}: {task.perspective}")
+    
+    try:
+        # Construct specific instruction for the Research Agent
+        instruction = (
+            f"You are investigating: '{task.perspective}'.\n"
+            f"Requirement: {task.expected_output}\n"
+        )
+        if task.query_hints:
+            instruction += f"Suggested Queries: {', '.join(task.query_hints)}"
+            
+        # Create a fresh message history for this task to keep context clean
+        # We need to simulate a clean state for the agent
+        messages = [HumanMessage(content=instruction, name="dispatcher")]
+        
+        # Invoke the ReAct Agent
+        # Note: We pass a strict recursion limit to prevent infinite loops
+        result = research_agent.invoke(
+            {"messages": messages}, 
+            {"recursion_limit": settings.RECURSION_LIMIT_RESEARCHER}
+        )
+        content = result["messages"][-1].content
+        
+        # Note: Ideally we parse sources from tool calls, but here we take the final answer
+        res = ResearchResult(
+            task_id=task.id,
+            perspective=task.perspective,
+            report=content,
+            sources=[], 
+            confidence=1.0
+        )
+        return {"research_results": [res]}
+        
+    except Exception as e:
+        logger.error(f"Worker failed task {task.id}: {e}")
+        # Return error result to allow aggregation to proceed
+        err_res = ResearchResult(
+            task_id=task.id,
+            perspective=task.perspective,
+            report=f"## Error\nInvestigation failed: {str(e)}",
+            sources=[],
+            confidence=0.0
+        )
+        return {"research_results": [err_res]}
+
+
+def research_aggregator_node(state: State) -> Command[Literal["reviewer"]]:
+    """
+    Aggregates all research results into a single step artifact.
+    """
+    logger.info("Aggregating research results...")
+    results = state.get("research_results", [])
+    
+    # Sort by task ID to maintain logical order from Planner
+    results.sort(key=lambda x: x.task_id)
+    
+    # Build Integrated Markdown Report
+    report_lines = ["# Integrated Research Report\n"]
+    
+    for res in results:
+        # Add Section Header
+        report_lines.append(f"## {res.perspective}")
+        if res.confidence < 0.5:
+             report_lines.append("> [!WARNING]\n> This section encountered issues during investigation.\n")
+        
+        # Content
+        report_lines.append(res.report)
+        report_lines.append("\n---\n")
+    
+    full_content = "\n".join(report_lines)
+    
+    # Identify Artifact Key
+    current_step = state["plan"][state["current_step_index"]]
+    
+    return Command(
+        update={
+            "messages": [
+                HumanMessage(
+                    content=settings.RESPONSE_FORMAT.format(
+                        role="research_aggregator", 
+                        content=f"Aggregated {len(results)} reports into final research document."
+                    ), 
+                    name="research_aggregator"
+                )
+            ],
+            "artifacts": _update_artifact(state, f"step_{current_step['id']}_research", full_content)
+        },
+        goto="reviewer",
     )

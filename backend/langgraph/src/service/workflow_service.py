@@ -245,18 +245,14 @@ async def run_agent_workflow(
                 content = "".join(text_parts)
 
             if content is None or content == "":
-                if not data["chunk"].additional_kwargs.get("reasoning_content"):
-                    continue
                 yield_payload = {
                     "event": "message",
-                    "data": {
-                        "message_id": data["chunk"].id,
-                        "delta": {
-                            "reasoning_content": (
-                                data["chunk"].additional_kwargs["reasoning_content"]
-                            )
-                        },
-                    },
+                    "id": data["chunk"].id,
+                    "data": (
+                        data["chunk"].additional_kwargs["reasoning_content"]
+                        if not content and data["chunk"].additional_kwargs.get("reasoning_content")
+                        else (content or "")
+                    ),
                 }
             else:
                 if node == "coordinator":
@@ -270,26 +266,20 @@ async def run_agent_workflow(
                             continue
                         yield_payload = {
                             "event": "message",
-                            "data": {
-                                "message_id": data["chunk"].id,
-                                "delta": {"content": cached_content},
-                            },
+                            "id": data["chunk"].id,
+                            "data": cached_content,
                         }
                     elif not is_handoff_case:
                         yield_payload = {
                             "event": "message",
-                            "data": {
-                                "message_id": data["chunk"].id,
-                                "delta": {"content": content},
-                            },
+                            "id": data["chunk"].id,
+                            "data": content,
                         }
                 else:
                     yield_payload = {
                         "event": "message",
-                        "data": {
-                            "message_id": data["chunk"].id,
-                            "delta": {"content": content},
-                        },
+                        "id": data["chunk"].id,
+                        "data": content,
                     }
         elif kind == "on_tool_start" and node in TEAM_MEMBERS:
             yield_payload = {
@@ -309,6 +299,55 @@ async def run_agent_workflow(
                     "tool_result": data["output"].content if data.get("output") else "",
                 },
             }
+        
+        elif kind == "on_chain_end" and name in streaming_llm_agents:
+            # 1. Emit end_of_agent first
+            yield {
+                "event": "end_of_agent",
+                "data": {
+                    "agent_name": name,
+                    "agent_id": f"{workflow_id}_{name}_{langgraph_step}",
+                },
+            }
+
+            # 2. Check for Artifact Generation
+            # outputs from nodes are typically Command objects or dicts with 'update'
+            output = data.get("output")
+            artifact_update = None
+            
+            # Extract 'artifacts' from Command or dict
+            if hasattr(output, "update"): # Command object
+                artifact_update = output.update.get("artifacts") if isinstance(output.update, dict) else None
+            elif isinstance(output, dict) and "artifacts" in output: # Standard dict state update
+                artifact_update = output["artifacts"]
+            elif isinstance(output, dict) and "update" in output: # Command as dict
+                artifact_update = output["update"].get("artifacts") if isinstance(output["update"], dict) else None
+
+            if artifact_update:
+                for key, content in artifact_update.items():
+                    # Determine Artifact Type based on key convention (step_{id}_{type})
+                    # Keys: step_1_research, step_2_story, step_3_visual, etc.
+                    art_type = "report" # default
+                    if "_story" in key: art_type = "outline" # or slides
+                    elif "_visual" in key: art_type = "image"
+                    elif "_research" in key: art_type = "report"
+                    elif "_data" in key: art_type = "report"
+                    
+                    # Create a deterministic ID for the artifact
+                    artifact_id = f"{workflow_id}_{key}"
+                    
+                    # Yield Artifact Event
+                    yield {
+                        "event": "artifact",
+                        "data": {
+                            "id": artifact_id,
+                            "type": art_type,
+                            "title": f"Artifact: {key}", # Frontend can rename
+                            "content": content, # JSON string or raw content
+                            "version": 1
+                        }
+                    }
+
         else:
             continue
         yield yield_payload
